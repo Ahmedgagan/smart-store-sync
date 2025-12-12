@@ -436,8 +436,9 @@ function product_csv_sync_handle_request( WP_REST_Request $request ) {
                     $product->set_status( $new_post_status );
                 }
                 $product->set_manage_stock( true );
-                $product->set_stock_status( $var_stock_status );
-                $product->set_stock_quantity( $var_stock_qty );
+
+                $product->set_stock_status( $new_wc_status );
+                $product->set_stock_quantity( ( strtolower( trim( $new_wc_status ) ) === 'in_stock' ) ? 1000 : 0 );
 
                 $product_id = $product->save();
                 if ( is_wp_error( $product_id ) ) {
@@ -476,8 +477,8 @@ function product_csv_sync_handle_request( WP_REST_Request $request ) {
 
                 if ( $new_wc_status !== $current_wc_status ) {
                     $product->set_manage_stock( true );
-                    $product->set_stock_status( $var_stock_status );
-                    $product->set_stock_quantity( $var_stock_qty );
+                    $product->set_stock_status( $new_wc_status );
+                    $product->set_stock_quantity(  ( strtolower( trim( $new_wc_status ) ) === 'in_stock' ) ? 1000 : 0 );
                     $stock_updated++;
                     $needs_save = true;
                 } else {

@@ -35,6 +35,10 @@ class MSI_Data_Provider {
      * @return array List of raw store objects (as associative arrays).
      */
     public function get_raw_stores() {
+        $site_url = site_url();
+        $parsed_url = parse_url($site_url); // Parse the URL into components
+        $domain = $parsed_url['host']; // Extract only the host (domain name)
+
         // Try cache first
         $cached = get_transient( self::TRANSIENT_KEY );
         if ( is_array( $cached ) ) {
@@ -43,6 +47,7 @@ class MSI_Data_Provider {
 
         $response = wp_remote_get( self::STORES_ENDPOINT, [
             'timeout' => 20,
+            'api_key' => hash('sha256', $domain),
         ] );
 
         if ( is_wp_error( $response ) ) {

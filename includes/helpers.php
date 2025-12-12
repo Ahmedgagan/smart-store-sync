@@ -35,12 +35,12 @@ function product_csv_sync_map_stock_status( $value ) {
     $in_values  = array( 'instock', 'in_stock', 'available', '1', 'true', 'yes' );
     $out_values = array( 'outofstock', 'out_of_stock', '0', 'false', 'no' );
     if ( in_array( $value, $in_values, true ) ) {
-        return 'instock';
+        return 'in_stock';
     }
     if ( in_array( $value, $out_values, true ) ) {
-        return 'outofstock';
+        return 'out_of_stock';
     }
-    return 'outofstock';
+    return 'out_of_stock';
 }
 
 /**
