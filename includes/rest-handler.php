@@ -120,6 +120,7 @@ function sss_handle_request(WP_REST_Request $request)
         $product_name        = $row['product_name'] ?? '';
         $image_url           = $row['image_url'] ?? '';
         $current_price       = $row['current_price'] ?? '';
+        $original_price       = $row['original_price'] ?? '';
         $stock_status_raw    = $row['stock_status'] ?? '';
         $is_active_raw       = $row['is_active'] ?? '';
         $has_variants_raw    = $row['has_variants'] ?? '';
@@ -137,6 +138,10 @@ function sss_handle_request(WP_REST_Request $request)
 
         if ($profit_margin) {
             $price_with_profit += $profit_margin;
+        }
+
+        if ($original_price < $price_with_profit) {
+            $original_price = $price_with_profit;
         }
 
         if ($external_product_id === '') {
@@ -186,7 +191,8 @@ function sss_handle_request(WP_REST_Request $request)
                     // each token becomes a minimal variant with attributes => ['size' => $tk]
                     $variants[] = array(
                         'sku' => '', // will be generated below if empty
-                        'price' => $price_with_profit ?: '',
+                        'sale_price' => $price_with_profit ?: '',
+                        'orignal_price' => $original_price ?: '',
                         'stock_status' => $stock_status_raw ?: '',
                         'stock_quantity' => (strtolower(trim($stock_status_raw)) === 'in_stock') ? 1000 : 0,
                         'image_url' => '', // leave empty so variation uses parent image
@@ -379,7 +385,8 @@ function sss_handle_request(WP_REST_Request $request)
 
                 // prepare variant values with sensible fallbacks
                 $var_sku = isset($v['sku']) ? trim($v['sku']) : '';
-                $var_price = isset($v['price']) ? trim($v['price']) : ($price_with_profit ?: '');
+                $var_price = isset($v['sale_price']) ? trim($v['sale_price']) : ($price_with_profit ?: '');
+                $var_orignal_price = isset($v['orignal_price']) ? trim($v['orignal_price']) : ($original_price ?: '');
                 $var_stock_status = isset($v['stock_status']) ? sss_map_stock_status($v['stock_status']) : $new_wc_status;
                 $var_stock_qty = isset($v['stock_quantity']) ? intval($v['stock_quantity']) : ($var_stock_status === 'in_stock' ? 1000 : 0);
                 $var_image_url = isset($v['image_url']) ? trim($v['image_url']) : '';
@@ -412,7 +419,11 @@ function sss_handle_request(WP_REST_Request $request)
                 // Set sku/price/stock on the object
                 $variation->set_sku($var_sku);
                 if ($var_price !== '') {
-                    $variation->set_regular_price($var_price);
+                    $variation->set_sale_price($var_price);
+                }
+
+                if ($var_orignal_price !== '') {
+                    $variation->set_regular_price($var_orignal_price);
                 }
 
                 // Ensure variation manages stock and values set on object
@@ -492,7 +503,8 @@ function sss_handle_request(WP_REST_Request $request)
                 $product = new WC_Product_Simple();
                 $product->set_name($product_name);
                 if ($current_price !== '') {
-                    $product->set_regular_price($price_with_profit);
+                    $product->set_sale_price($price_with_profit);
+                    $product->set_regular_price($original_price);
                 }
                 if (is_array($woo_category_ids)) {
                     $product->set_category_ids($woo_category_ids);
@@ -555,8 +567,13 @@ function sss_handle_request(WP_REST_Request $request)
                     $needs_save = true;
                 }
 
-                if ($current_price !== '' && $current_price != $product->get_regular_price()) {
-                    $product->set_regular_price($price_with_profit);
+                if ($original_price !== '' && $original_price != $product->get_regular_price()) {
+                    $product->set_regular_price($original_price);
+                    $needs_save = true;
+                }
+
+                if ($current_price !== '' && $current_price != $product->get_sale_price()) {
+                    $product->set_sale_price($price_with_profit);
                     $needs_save = true;
                 }
 
