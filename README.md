@@ -1,1 +1,1 @@
-# smart-store-sync
+# Smart Store Sync

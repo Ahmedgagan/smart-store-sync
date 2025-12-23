@@ -60,7 +60,7 @@ class MSI_Data_Provider
     public function get_subscription_details($purchase_token, $reset_catch = false)
     {
         $site_url = site_url();
-        $parsed_url = parse_url($site_url); // Parse the URL into components
+        $parsed_url = wp_parse_url($site_url); // Parse the URL into components
         $domain = $parsed_url['host'];
 
         // Try cache first
@@ -112,7 +112,7 @@ class MSI_Data_Provider
     public function set_active_stores($purchase_token, $enabled_stores)
     {
         $site_url = site_url();
-        $parsed_url = parse_url($site_url); // Parse the URL into components
+        $parsed_url = wp_parse_url($site_url); // Parse the URL into components
         $domain = $parsed_url['host'];
 
         $body_params = array(
@@ -159,7 +159,7 @@ class MSI_Data_Provider
     public function save_secrets($purchase_token, $consumer_key, $consumer_secret)
     {
         $site_url = site_url();
-        $parsed_url = parse_url($site_url); // Parse the URL into components
+        $parsed_url = wp_parse_url($site_url); // Parse the URL into components
         $domain = $parsed_url['host'];
 
         $body_params = array(

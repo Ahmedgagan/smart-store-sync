@@ -3,6 +3,14 @@
 require_once MSI_PATH . 'includes/class-data-provider.php';
 require_once MSI_PATH . 'includes/class-settings.php';
 
+if (! function_exists('WP_Filesystem')) {
+    require_once ABSPATH . 'wp-admin/includes/file.php';
+}
+
+WP_Filesystem();
+
+global $wp_filesystem;
+
 // includes/rest-handler.php
 if (! defined('ABSPATH')) {
     exit;
@@ -44,10 +52,6 @@ function product_csv_sync_handle_request(WP_REST_Request $request)
 
     if (! class_exists('WooCommerce')) {
         return new WP_Error('product_csv_sync_no_woocommerce', 'WooCommerce must be active.', array('status' => 500));
-    }
-
-    if (function_exists('set_time_limit')) {
-        @set_time_limit(0);
     }
 
     $files = $request->get_file_params();

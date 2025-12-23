@@ -55,34 +55,29 @@ class MSI_Settings
         switch ($_POST['store_import_action']) {
 
             case 'save_purchase_token':
-                $purchase_token = isset($_POST['purchase_token']) ? $_POST['purchase_token'] : '';
-                $consumer_key = isset($_POST['consumer_key']) ? $_POST['consumer_key'] : '';
-                $consumer_secret = isset($_POST['consumer_secret']) ? $_POST['consumer_secret'] : '';
-                // $settings['purchase_token'] = $purchase_token;
-                // $settings['consumer_key'] = $consumer_key;
-                // $settings['consumer_secret'] = $consumer_secret;
+                $purchase_token = isset($_POST['purchase_token']) ? sanitize_text_field(wp_unslash($_POST['purchase_token'])) : '';
+                $consumer_key = isset($_POST['consumer_key']) ? sanitize_text_field(wp_unslash($_POST['consumer_key'])) : '';
+                $consumer_secret = isset($_POST['consumer_secret']) ? sanitize_text_field(wp_unslash($_POST['consumer_secret'])) : '';
 
-
-                // $this->update_settings($settings);
                 if ($this->update_secrets($settings, $purchase_token, $consumer_key, $consumer_secret)) {
                     add_settings_error(
                         'store-import-mapping',
                         'store_import_purchase_token_saved',
-                        __('Secrets Saved Successfully.', 'multi-store-import'),
+                        __('Secrets Saved Successfully.', 'smart-store-sync'),
                         'updated'
                     );
                 } else {
                     add_settings_error(
                         'store-import-mapping',
                         'store_import_purchase_token_saved',
-                        __('Error Saving Secrets.', 'multi-store-import'),
+                        __('Error Saving Secrets.', 'smart-store-sync'),
                         'Error'
                     );
                 }
                 break;
             case 'save_stores':
                 $enabled_stores = isset($_POST['enabled_stores']) && is_array($_POST['enabled_stores'])
-                    ? array_map('sanitize_text_field', $_POST['enabled_stores'])
+                    ? array_map('sanitize_text_field', wp_unslash($_POST['enabled_stores']))
                     : [];
 
                 $this->update_enabled_stores($settings, $enabled_stores);
@@ -90,13 +85,13 @@ class MSI_Settings
                 add_settings_error(
                     'store-import-mapping',
                     'store_import_stores_saved',
-                    __('Stores selection saved.', 'multi-store-import'),
+                    __('Stores selection saved.', 'smart-store-sync'),
                     'updated'
                 );
                 break;
 
             case 'save_mappings':
-                $store_id = isset($_POST['store_id']) ? sanitize_text_field($_POST['store_id']) : null;
+                $store_id = isset($_POST['store_id']) ? sanitize_text_field(wp_unslash($_POST['store_id'])) : null;
 
                 if ($store_id) {
                     // Save fallback
@@ -109,7 +104,8 @@ class MSI_Settings
                     // Save category mappings
                     $mappings = [];
                     if (! empty($_POST['mapping']) && is_array($_POST['mapping'])) {
-                        foreach ($_POST['mapping'] as $remote_cat_id => $wp_term_id) {
+                        //  phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Sanitized per-item below.
+                        foreach (wp_unslash($_POST['mapping']) as $remote_cat_id => $wp_term_id) {
                             $remote_cat_id = sanitize_text_field($remote_cat_id);
                             $wp_term_id    = intval($wp_term_id);
 
@@ -120,7 +116,8 @@ class MSI_Settings
                     }
 
                     if (! empty($_POST['profit_margin']) && is_array($_POST['profit_margin'])) {
-                        foreach ($_POST['profit_margin'] as $remote_cat_id => $profit_margin) {
+                        //  phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Sanitized per-item below.
+                        foreach (wp_unslash($_POST['profit_margin']) as $remote_cat_id => $profit_margin) {
                             $remote_cat_id = sanitize_text_field($remote_cat_id);
                             $mappings[$remote_cat_id]['profit_margin'] = $profit_margin;
                         }
@@ -137,7 +134,7 @@ class MSI_Settings
                     add_settings_error(
                         'store-import-mapping',
                         'store_import_mappings_saved',
-                        __('Category mappings saved.', 'multi-store-import'),
+                        __('Category mappings saved.', 'smart-store-sync'),
                         'updated'
                     );
                 }
@@ -156,17 +153,20 @@ class MSI_Settings
         }
 
         $settings = $this->get_settings();
-        $active_tab = isset($_GET['tab']) ? sanitize_text_field($_GET['tab']) : 'settings';
+
+        // Determine active tab (UI navigation only, no data processing)
+        // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- UI state only.
+        $active_tab = isset($_GET['tab']) ? sanitize_key(wp_unslash($_GET['tab'])) : 'settings';
 
         settings_errors('store-import-mapping');
 
         echo '<div class="wrap">';
-        echo '<h1>' . esc_html__('Store Import Mapping', 'multi-store-import') . '</h1>';
+        echo '<h1>' . esc_html__('Store Import Mapping', 'smart-store-sync') . '</h1>';
 
         echo '<h2 class="nav-tab-wrapper">';
-        $this->render_tab_link('settings', __('Account & Plan', 'multi-store-import'), $active_tab);
-        $this->render_tab_link('stores', __('Stores', 'multi-store-import'), $active_tab);
-        $this->render_tab_link('mapping', __('Category Mapping', 'multi-store-import'), $active_tab);
+        $this->render_tab_link('settings', __('Account & Plan', 'smart-store-sync'), $active_tab);
+        $this->render_tab_link('stores', __('Stores', 'smart-store-sync'), $active_tab);
+        $this->render_tab_link('mapping', __('Category Mapping', 'smart-store-sync'), $active_tab);
         echo '</h2>';
 
         if ($active_tab === 'mapping') {
@@ -215,17 +215,17 @@ class MSI_Settings
             <?php wp_nonce_field('store_import_save', 'store_import_nonce'); ?>
             <input type="hidden" name="store_import_action" value="save_stores" />
 
-            <h2><?php esc_html_e('Stores', 'multi-store-import'); ?></h2>
+            <h2><?php esc_html_e('Stores', 'smart-store-sync'); ?></h2>
 
             <?php if (empty($stores)) : ?>
-                <p><?php esc_html_e('No stores found. Make sure your scraper/API is configured.', 'multi-store-import'); ?></p>
+                <p><?php esc_html_e('No stores found. Make sure your scraper/API is configured.', 'smart-store-sync'); ?></p>
             <?php else : ?>
                 <table class="widefat striped">
                     <thead>
                         <tr>
-                            <th><?php esc_html_e('Enable', 'multi-store-import'); ?></th>
-                            <th><?php esc_html_e('Store Name', 'multi-store-import'); ?></th>
-                            <th><?php esc_html_e('Store ID', 'multi-store-import'); ?></th>
+                            <th><?php esc_html_e('Enable', 'smart-store-sync'); ?></th>
+                            <th><?php esc_html_e('Store Name', 'smart-store-sync'); ?></th>
+                            <th><?php esc_html_e('Store ID', 'smart-store-sync'); ?></th>
                         </tr>
                     </thead>
                     <tbody>
@@ -252,7 +252,7 @@ class MSI_Settings
 
             <p class="submit">
                 <button type="submit" class="button button-primary">
-                    <?php esc_html_e('Save Stores', 'multi-store-import'); ?>
+                    <?php esc_html_e('Save Stores', 'smart-store-sync'); ?>
                 </button>
             </p>
         </form>
@@ -267,13 +267,13 @@ class MSI_Settings
         $stores = $this->get_remote_stores($settings);
 
         if (empty($stores)) {
-            echo '<p>' . esc_html__('No stores available. Configure and save stores first.', 'multi-store-import') . '</p>';
+            echo '<p>' . esc_html__('No stores available. Configure and save stores first.', 'smart-store-sync') . '</p>';
             return;
         }
 
-        $selected_store = isset($_GET['store_id'])
-            ? sanitize_text_field($_GET['store_id'])
-            : array_key_first($stores);
+        // Selected store (UI navigation only)
+        // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- UI state only, no data processing.
+        $selected_store = isset($_GET['store_id']) ? sanitize_text_field(wp_unslash($_GET['store_id'])) : array_key_first($stores);
 
         if (! isset($stores[$selected_store])) {
             $selected_store = array_key_first($stores);
@@ -295,7 +295,7 @@ class MSI_Settings
             <input type="hidden" name="tab" value="mapping" />
 
             <label for="store_id">
-                <?php esc_html_e('Select Store:', 'multi-store-import'); ?>
+                <?php esc_html_e('Select Store:', 'smart-store-sync'); ?>
             </label>
             <select name="store_id" id="store_id" onchange="this.form.submit();">
                 <?php foreach ($stores as $store_id => $store) : ?>
@@ -305,7 +305,7 @@ class MSI_Settings
                 <?php endforeach; ?>
             </select>
             <noscript>
-                <button type="submit" class="button"><?php esc_html_e('Go', 'multi-store-import'); ?></button>
+                <button type="submit" class="button"><?php esc_html_e('Go', 'smart-store-sync'); ?></button>
             </noscript>
         </form>
 
@@ -318,7 +318,7 @@ class MSI_Settings
                 <?php
                 printf(
                     /* translators: %s: store name */
-                    esc_html__('Category Mapping for: %s', 'multi-store-import'),
+                    esc_html__('Category Mapping for: %s', 'smart-store-sync'),
                     esc_html($stores[$selected_store]['name'] ?? $selected_store)
                 );
                 ?>
@@ -326,11 +326,11 @@ class MSI_Settings
 
             <p>
                 <label for="fallback_category">
-                    <?php esc_html_e('Fallback WooCommerce category (used when no specific mapping exists):', 'multi-store-import'); ?>
+                    <?php esc_html_e('Fallback WooCommerce category (used when no specific mapping exists):', 'smart-store-sync'); ?>
                 </label>
                 <br />
                 <select name="fallback_category" id="fallback_category">
-                    <option value="0"><?php esc_html_e('— None —', 'multi-store-import'); ?></option>
+                    <option value="0"><?php esc_html_e('— None —', 'smart-store-sync'); ?></option>
                     <?php foreach ($wp_categories as $cat) : ?>
                         <option value="<?php echo esc_attr($cat->term_id); ?>" <?php selected($cat->term_id, $fallback); ?>>
                             <?php echo esc_html($cat->name); ?>
@@ -340,14 +340,14 @@ class MSI_Settings
             </p>
 
             <?php if (empty($categories)) : ?>
-                <p><?php esc_html_e('No categories found for this store.', 'multi-store-import'); ?></p>
+                <p><?php esc_html_e('No categories found for this store.', 'smart-store-sync'); ?></p>
             <?php else : ?>
                 <table class="widefat striped">
                     <thead>
                         <tr>
-                            <th><?php esc_html_e('Source Category', 'multi-store-import'); ?></th>
-                            <th><?php esc_html_e('WooCommerce Category', 'multi-store-import'); ?></th>
-                            <th><?php esc_html_e('Profit Margin', 'multi-store-import'); ?></th>
+                            <th><?php esc_html_e('Source Category', 'smart-store-sync'); ?></th>
+                            <th><?php esc_html_e('WooCommerce Category', 'smart-store-sync'); ?></th>
+                            <th><?php esc_html_e('Profit Margin', 'smart-store-sync'); ?></th>
                         </tr>
                     </thead>
                     <tbody>
@@ -362,7 +362,7 @@ class MSI_Settings
                                 <td><?php echo esc_html($label); ?></td>
                                 <td>
                                     <select name="mapping[<?php echo esc_attr($remote_id); ?>]">
-                                        <option value="0"><?php esc_html_e('— Not mapped —', 'multi-store-import'); ?></option>
+                                        <option value="0"><?php esc_html_e('— Not mapped —', 'smart-store-sync'); ?></option>
                                         <?php foreach ($wp_categories as $cat) : ?>
                                             <option value="<?php echo esc_attr($cat->term_id); ?>" <?php selected($cat->term_id, $mapped_id); ?>>
                                                 <?php echo esc_html($cat->name); ?>
@@ -382,7 +382,7 @@ class MSI_Settings
 
             <p class="submit">
                 <button type="submit" class="button button-primary">
-                    <?php esc_html_e('Save Mappings', 'multi-store-import'); ?>
+                    <?php esc_html_e('Save Mappings', 'smart-store-sync'); ?>
                 </button>
             </p>
         </form>
@@ -463,7 +463,7 @@ class MSI_Settings
 
             <p class="submit">
                 <button type="submit" class="button button-primary">
-                    <?php esc_html_e('Save & Verify', 'multi-store-import'); ?>
+                    <?php esc_html_e('Save & Verify', 'smart-store-sync'); ?>
                 </button>
             </p>
         </form>

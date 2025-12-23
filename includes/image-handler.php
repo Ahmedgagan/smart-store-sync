@@ -37,7 +37,7 @@ function product_csv_sync_set_product_image_from_url($product_id, $image_url)
     }
 
     // Build an attachment post
-    $filename = basename(parse_url($image_url, PHP_URL_PATH));
+    $filename = basename(wp_parse_url($image_url, PHP_URL_PATH));
     $title    = sanitize_file_name(pathinfo($filename, PATHINFO_FILENAME));
 
     $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
