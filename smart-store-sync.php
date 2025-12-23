@@ -23,6 +23,7 @@ require_once MSI_PATH . 'includes/class-settings.php';
 require_once MSI_PATH . 'includes/helpers.php';
 require_once MSI_PATH . 'includes/rest-handler.php';
 require_once MSI_PATH . 'includes/image-handler.php';
+require_once MSI_PATH . 'includes/seller-name-order-item.php';
 
 // init settings class (existing file)
 add_action('plugins_loaded', function () {

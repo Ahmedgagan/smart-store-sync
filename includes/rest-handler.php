@@ -103,6 +103,8 @@ function product_csv_sync_handle_request(WP_REST_Request $request)
         $has_variants_raw    = $row['has_variants'] ?? '';
         $variants_raw        = $row['variants'] ?? '';
         $external_store_id = $row['store_id'];
+        $external_store_name = $row['store_name'];
+        $external_product_url = $row['product_url'];
         $external_category_id = $row['category_id'];
         $profit_margin = $stored['category_mappings'][$external_store_id][$external_category_id]['profit_margin'] ?? 0;
         $woo_category_ids = array($stored['category_mappings'][$external_store_id][$external_category_id]['wp_category'] ?? 0);
@@ -212,6 +214,8 @@ function product_csv_sync_handle_request(WP_REST_Request $request)
                     continue;
                 }
                 $parent->update_meta_data('_external_product_id', $external_product_id);
+                $parent->update_meta_data('_external_store_name', $external_store_name);
+                $parent->update_meta_data('_external_product_url', $external_product_url);
                 $parent->save();
                 $product = wc_get_product($parent_id);
                 $external_map[$external_product_id] = $parent_id;
@@ -243,6 +247,8 @@ function product_csv_sync_handle_request(WP_REST_Request $request)
 
                     $parent_id = $parent->save();
                     $parent->update_meta_data('_external_product_id', $external_product_id);
+                    $parent->update_meta_data('_external_store_name', $external_store_name);
+                    $parent->update_meta_data('_external_product_url', $external_product_url);
                     $parent->save();
                     $product = wc_get_product($parent_id);
                     $external_map[$external_product_id] = $parent_id;
@@ -486,6 +492,8 @@ function product_csv_sync_handle_request(WP_REST_Request $request)
                 }
 
                 $product->update_meta_data('_external_product_id', $external_product_id);
+                $product->update_meta_data('_external_store_name', $external_store_name);
+                $product->update_meta_data('_external_product_url', $external_product_url);
 
                 if ($image_url !== '') {
                     $attachment_id = product_csv_sync_set_product_image_from_url($product_id, $image_url);

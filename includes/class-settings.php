@@ -4,7 +4,6 @@ if (! defined('ABSPATH')) exit;
 
 class MSI_Settings
 {
-
     const OPTION_KEY = 'store_import_settings';
 
     protected MSI_Data_Provider $data_provider;
@@ -57,41 +56,43 @@ class MSI_Settings
 
             case 'save_purchase_token':
                 $purchase_token = isset($_POST['purchase_token']) ? $_POST['purchase_token'] : '';
-                echo "<script>console.log('PHP Variable:', '" . json_encode($purchase_token) . "');</script>";
-                $settings['purchase_token'] = $purchase_token;
+                $consumer_key = isset($_POST['consumer_key']) ? $_POST['consumer_key'] : '';
+                $consumer_secret = isset($_POST['consumer_secret']) ? $_POST['consumer_secret'] : '';
+                // $settings['purchase_token'] = $purchase_token;
+                // $settings['consumer_key'] = $consumer_key;
+                // $settings['consumer_secret'] = $consumer_secret;
 
-                $this->update_settings($settings);
 
-                add_settings_error(
-                    'store-import-mapping',
-                    'store_import_purchase_token_saved',
-                    __('Purchase Token saved.', 'multi-store-import'),
-                    'updated'
-                );
+                // $this->update_settings($settings);
+                if ($this->update_secrets($settings, $purchase_token, $consumer_key, $consumer_secret)) {
+                    add_settings_error(
+                        'store-import-mapping',
+                        'store_import_purchase_token_saved',
+                        __('Secrets Saved Successfully.', 'multi-store-import'),
+                        'updated'
+                    );
+                } else {
+                    add_settings_error(
+                        'store-import-mapping',
+                        'store_import_purchase_token_saved',
+                        __('Error Saving Secrets.', 'multi-store-import'),
+                        'Error'
+                    );
+                }
                 break;
             case 'save_stores':
                 $enabled_stores = isset($_POST['enabled_stores']) && is_array($_POST['enabled_stores'])
                     ? array_map('sanitize_text_field', $_POST['enabled_stores'])
                     : [];
 
-                $dynamic_limit = $this->get_allowed_store_selection_limit($settings);
+                $this->update_enabled_stores($settings, $enabled_stores);
 
-                if (count($enabled_stores) > $dynamic_limit) {
-                    add_settings_error(
-                        'store-import-mapping',
-                        'exceeded_store_selection_limit',
-                        'You exceeded the selection limit of ' . $dynamic_limit,
-                        'error'
-                    );
-                } else {
-                    $this->update_enabled_stores($settings, $enabled_stores);
-                    add_settings_error(
-                        'store-import-mapping',
-                        'store_import_stores_saved',
-                        __('Stores selection saved.', 'multi-store-import'),
-                        'updated'
-                    );
-                }
+                add_settings_error(
+                    'store-import-mapping',
+                    'store_import_stores_saved',
+                    __('Stores selection saved.', 'multi-store-import'),
+                    'updated'
+                );
                 break;
 
             case 'save_mappings':
@@ -356,7 +357,6 @@ class MSI_Settings
                             $label     = $remote_cat['label'] ?? ($remote_cat['name'] ?? $remote_id);
                             $mapped_id = $existing_mappings[$remote_id]['wp_category'] ?? 0;
                             $profit_margin = $existing_mappings[$remote_id]['profit_margin'] ?? 0;
-                            echo "<script>console.log('PHP Variable:', '" . json_encode($profit_margin) . "');</script>";
                             ?>
                             <tr>
                                 <td><?php echo esc_html($label); ?></td>
@@ -395,16 +395,15 @@ class MSI_Settings
     private function render_account_and_plan_tab($settings)
     {
         $purchase_token = $settings['purchase_token'];
+        $consumer_key = $settings['consumer_key'];
+        $consumer_secret = $settings['consumer_secret'];
         $subscription_details = $this->get_subscription_details($purchase_token);
-
-        echo "<script>console.log('Subscription Details:', '" . json_encode($subscription_details) . "');</script>";
-        echo "<script>console.log('Subscription Details:', '" . json_encode($subscription_details['plan_name']) . "');</script>";
     ?>
         <!-- 🔒 NOT ACTIVATED STATE -->
         <?php if (empty($subscription_details)) : ?>
             <div class="notice notice-warning">
                 <p><strong>Plugin not activated</strong></p>
-                <p>Please enter your purchase token to activate Smart Store Sync.</p>
+                <p>Please check your purchase token to activate Smart Store Sync.</p>
             </div>
         <?php endif; ?>
 
@@ -425,6 +424,38 @@ class MSI_Settings
                             maxlength="36" />
                         <p class="description">
                             Enter the token you received after purchase.
+                        </p>
+                    </td>
+                </tr>
+                <tr>
+                    <th scope="row">Woocommerce Customer Key</th>
+                    <td>
+                        <input
+                            type="text"
+                            name="consumer_key"
+                            class="regular-text"
+                            value="<?php echo esc_attr($consumer_key); ?>"
+                            placeholder="Woocommerce Consumer Key (32 Chars)"
+                            minlength="32"
+                            maxlength="32" />
+                        <p class="description">
+                            Enter your WooCommerce Consumer Key.
+                        </p>
+                    </td>
+                </tr>
+                <tr>
+                    <th scope="row">Woocommerce Customer Secret</th>
+                    <td>
+                        <input
+                            type="text"
+                            name="consumer_secret"
+                            class="regular-text"
+                            value="<?php echo esc_attr($consumer_secret); ?>"
+                            placeholder="Woocommerce Consumer Secret (42-44 Chars)"
+                            minlength="42"
+                            maxlength="44" />
+                        <p class="description">
+                            Enter your WooCommerce Consumer Secret.
                         </p>
                     </td>
                 </tr>
@@ -468,7 +499,7 @@ class MSI_Settings
                         <td><?php echo esc_html($subscription_details['expires_at'] ?? '—'); ?></td>
                     </tr>
                     <tr>
-                        <td><strong>Stores Allowed</strong></td>
+                        <td><strong>Active Stores</strong></td>
                         <td><?php echo esc_html(count($subscription_details['selected_stores']) ?? '—'); ?></td>
                     </tr>
                 </tbody>
@@ -510,6 +541,33 @@ class MSI_Settings
         update_option(self::OPTION_KEY, $settings);
     }
 
+    private function update_secrets($settings, $purchase_token, $consumer_key, $consumer_secret)
+    {
+        if (!$purchase_token) {
+            return false;
+        }
+
+        if (!$consumer_key) {
+            return false;
+        }
+
+        if (!$consumer_secret) {
+            return false;
+        }
+
+        if ($this->data_provider->save_secrets($purchase_token, $consumer_key, $consumer_secret)) {
+            $settings['purchase_token'] = $purchase_token;
+            $settings['consumer_key'] = $consumer_key;
+            $settings['consumer_secret'] = $consumer_secret;
+
+            $this->update_settings($settings);
+
+            return true;
+        }
+
+        return false;
+    }
+
     private function get_remote_stores($settings)
     {
         return $this->data_provider->get_stores();
@@ -537,11 +595,6 @@ class MSI_Settings
         } else {
             return [];
         }
-    }
-
-    private function get_allowed_store_selection_limit($settings)
-    {
-        return $this->data_provider->get_allowed_store_selection_limit($settings['purchase_token']);
     }
 
     private function update_enabled_stores($settings, $enabled_stores)
