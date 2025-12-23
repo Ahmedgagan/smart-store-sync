@@ -3,14 +3,6 @@
 require_once MSI_PATH . 'includes/class-data-provider.php';
 require_once MSI_PATH . 'includes/class-settings.php';
 
-if (! function_exists('WP_Filesystem')) {
-    require_once ABSPATH . 'wp-admin/includes/file.php';
-}
-
-WP_Filesystem();
-
-global $wp_filesystem;
-
 // includes/rest-handler.php
 if (! defined('ABSPATH')) {
     exit;
@@ -25,7 +17,7 @@ add_action('rest_api_init', function () {
         '/products',
         array(
             'methods'             => array('GET', 'POST'),
-            'callback'            => 'product_csv_sync_handle_request',
+            'callback'            => 'sss_handle_request',
             'permission_callback' => '__return_true',
         )
     );
@@ -35,10 +27,18 @@ add_action('rest_api_init', function () {
  * Main handler
  *
  * Note: this function relies on helpers in includes/helpers.php
- * and image helper product_csv_sync_set_product_image_from_url() from includes/image-handler.php
+ * and image helper sss_set_product_image_from_url() from includes/image-handler.php
  */
-function product_csv_sync_handle_request(WP_REST_Request $request)
+function sss_handle_request(WP_REST_Request $request)
 {
+
+    if (! function_exists('WP_Filesystem')) {
+        require_once ABSPATH . 'wp-admin/includes/file.php';
+    }
+
+    WP_Filesystem();
+
+    global $wp_filesystem;
 
     if ($request->get_method() === 'GET') {
         return new WP_REST_Response(
@@ -51,26 +51,44 @@ function product_csv_sync_handle_request(WP_REST_Request $request)
     }
 
     if (! class_exists('WooCommerce')) {
-        return new WP_Error('product_csv_sync_no_woocommerce', 'WooCommerce must be active.', array('status' => 500));
+        return new WP_Error('sss_no_woocommerce', 'WooCommerce must be active.', array('status' => 500));
     }
 
     $files = $request->get_file_params();
     if (empty($files['file']) || ! isset($files['file']['tmp_name'])) {
-        return new WP_Error('product_csv_sync_no_file', 'No CSV file uploaded. Please send it as "file" (multipart/form-data).', array('status' => 400));
+        return new WP_Error('sss_no_file', 'No CSV file uploaded. Please send it as "file" (multipart/form-data).', array('status' => 400));
+    }
+
+    // if (! file_exists($csv_path)) {
+    //     return new WP_Error('sss_file_missing', 'Uploaded file not found on server.', array('status' => 500));
+    // }
+
+    if (! $wp_filesystem || ! is_object($wp_filesystem)) {
+        return new WP_Error(
+            'filesystem_unavailable',
+            'WordPress filesystem could not be initialized.'
+        );
     }
 
     $csv_path = $files['file']['tmp_name'];
-    if (! file_exists($csv_path)) {
-        return new WP_Error('product_csv_sync_file_missing', 'Uploaded file not found on server.', array('status' => 500));
+
+    if (! $wp_filesystem->exists($csv_path)) {
+        return new WP_Error(
+            'csv_missing',
+            'Uploaded CSV file not found.',
+            ['status' => 400]
+        );
     }
 
+    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
     $handle = fopen($csv_path, 'r');
+
     if (! $handle) {
-        return new WP_Error('product_csv_sync_cannot_open', 'Cannot open uploaded CSV file.', array('status' => 500));
+        return new WP_Error('sss_cannot_open', 'Cannot open uploaded CSV file.', array('status' => 500));
     }
 
     // Build external map
-    $external_map = product_csv_sync_build_external_map();
+    $external_map = sss_build_external_map();
 
     $stored = get_option('store_import_settings', []);
     $row_number      = 0;
@@ -128,8 +146,8 @@ function product_csv_sync_handle_request(WP_REST_Request $request)
             continue;
         }
 
-        $new_wc_status   = product_csv_sync_map_stock_status($stock_status_raw);
-        $new_post_status = product_csv_sync_map_active_to_status($is_active_raw);
+        $new_wc_status   = sss_map_stock_status($stock_status_raw);
+        $new_post_status = sss_map_active_to_status($is_active_raw);
         $has_variants    = in_array(strtolower(trim($has_variants_raw)), array('1', 'true', 'yes', 'y', 'on'), true);
 
         $product = null;
@@ -227,7 +245,7 @@ function product_csv_sync_handle_request(WP_REST_Request $request)
 
                 // attach parent image here once (if provided)
                 if ($image_url !== '') {
-                    $parent_image_id = product_csv_sync_set_product_image_from_url($parent_id, $image_url);
+                    $parent_image_id = sss_set_product_image_from_url($parent_id, $image_url);
                     if ($parent_image_id) {
                         // set thumbnail for parent
                         $product->set_image_id($parent_image_id);
@@ -259,7 +277,7 @@ function product_csv_sync_handle_request(WP_REST_Request $request)
 
                     // attach parent image if provided
                     if ($image_url !== '') {
-                        $parent_image_id = product_csv_sync_set_product_image_from_url($parent_id, $image_url);
+                        $parent_image_id = sss_set_product_image_from_url($parent_id, $image_url);
                         if ($parent_image_id) {
                             $product->set_image_id($parent_image_id);
                             $product->update_meta_data('_external_image_src', $image_url);
@@ -275,7 +293,7 @@ function product_csv_sync_handle_request(WP_REST_Request $request)
 
                     $parent_id = $product->get_id();
                     if (! $parent_image_id && $image_url !== '') {
-                        $parent_image_id = product_csv_sync_set_product_image_from_url($parent_id, $image_url);
+                        $parent_image_id = sss_set_product_image_from_url($parent_id, $image_url);
                         if ($parent_image_id) {
                             $product->set_image_id($parent_image_id);
                             $product->update_meta_data('_external_image_src', $image_url);
@@ -362,7 +380,7 @@ function product_csv_sync_handle_request(WP_REST_Request $request)
                 // prepare variant values with sensible fallbacks
                 $var_sku = isset($v['sku']) ? trim($v['sku']) : '';
                 $var_price = isset($v['price']) ? trim($v['price']) : ($price_with_profit ?: '');
-                $var_stock_status = isset($v['stock_status']) ? product_csv_sync_map_stock_status($v['stock_status']) : $new_wc_status;
+                $var_stock_status = isset($v['stock_status']) ? sss_map_stock_status($v['stock_status']) : $new_wc_status;
                 $var_stock_qty = isset($v['stock_quantity']) ? intval($v['stock_quantity']) : ($var_stock_status === 'in_stock' ? 1000 : 0);
                 $var_image_url = isset($v['image_url']) ? trim($v['image_url']) : '';
 
@@ -425,7 +443,7 @@ function product_csv_sync_handle_request(WP_REST_Request $request)
                 if ($var_image_url !== '') {
                     $prev_src = get_post_meta($variation_id, '_external_image_src', true);
                     if ($prev_src !== $var_image_url) {
-                        $att_id = product_csv_sync_set_product_image_from_url($parent_id, $var_image_url);
+                        $att_id = sss_set_product_image_from_url($parent_id, $var_image_url);
                         if ($att_id) {
                             update_post_meta($variation_id, '_thumbnail_id', $att_id);
                             update_post_meta($variation_id, '_external_image_src', $var_image_url);
@@ -500,7 +518,7 @@ function product_csv_sync_handle_request(WP_REST_Request $request)
                 $product->update_meta_data('_external_product_url', $external_product_url);
 
                 if ($image_url !== '') {
-                    $attachment_id = product_csv_sync_set_product_image_from_url($product_id, $image_url);
+                    $attachment_id = sss_set_product_image_from_url($product_id, $image_url);
                     if ($attachment_id) {
                         $product->set_image_id($attachment_id);
                         $product->update_meta_data('_external_image_src', $image_url);
@@ -550,7 +568,7 @@ function product_csv_sync_handle_request(WP_REST_Request $request)
                 if ($image_url !== '') {
                     $previous_src = $product->get_meta('_external_image_src', true);
                     if ($previous_src !== $image_url) {
-                        $attachment_id = product_csv_sync_set_product_image_from_url($product->get_id(), $image_url);
+                        $attachment_id = sss_set_product_image_from_url($product->get_id(), $image_url);
                         if ($attachment_id) {
                             $product->set_image_id($attachment_id);
                             $product->update_meta_data('_external_image_src', $image_url);
@@ -573,6 +591,7 @@ function product_csv_sync_handle_request(WP_REST_Request $request)
         }
     } // end while
 
+    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
     fclose($handle);
 
     $error_truncated = (count($errors) >= $max_errors);

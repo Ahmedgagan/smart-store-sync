@@ -3,9 +3,11 @@
 /**
  * Plugin Name: Smart Store Sync
  * Description: Import/update WooCommerce products from a CSV via REST API using your CSV headers, with flexible variation support.
- * Version: 1.3.1
+ * Version: 1.0.0
  * Author: Kodyt
  * Author URI:        https://kodyt.com
+ * License:           GPL-2.0-or-later
+ * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
  */
 
 if (! defined('ABSPATH')) {

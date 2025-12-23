@@ -8,9 +8,9 @@ if (! defined('ABSPATH')) {
  * Automatically list all item-specific URLs in a clickable Order Note
  */
 
-add_action('woocommerce_store_api_checkout_order_processed', 'add_item_urls_to_mobile_notes', 10, 2);
+add_action('woocommerce_store_api_checkout_order_processed', 'sss_add_item_urls_to_order_notes', 10, 2);
 
-function add_item_urls_to_mobile_notes($order)
+function sss_add_item_urls_to_order_notes($order)
 {
   $note_content = "Product Links:\n";
   $has_links = false;

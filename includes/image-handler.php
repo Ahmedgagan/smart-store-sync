@@ -4,6 +4,9 @@ if (! defined('ABSPATH')) {
     exit;
 }
 
+const CACHE_GRP   = 'smart_store_sync';
+const CACHE_TTL       = 600; // seconds (10 minutes) – adjust as you like
+
 /**
  * Create (or reuse) a "virtual" attachment pointing to a remote image URL,
  * ensure minimal meta exists so WooCommerce will accept it as a thumbnail,
@@ -11,7 +14,7 @@ if (! defined('ABSPATH')) {
  *
  * Returns attachment ID (int) on success, or 0 on failure.
  */
-function product_csv_sync_set_product_image_from_url($product_id, $image_url)
+function sss_set_product_image_from_url($product_id, $image_url)
 {
     if (! filter_var($image_url, FILTER_VALIDATE_URL)) {
         return 0;
@@ -19,11 +22,21 @@ function product_csv_sync_set_product_image_from_url($product_id, $image_url)
 
     global $wpdb;
 
-    // 1) Try dedupe: find existing attachment with same guid.
-    $existing = $wpdb->get_var($wpdb->prepare(
-        "SELECT ID FROM {$wpdb->posts} WHERE guid = %s AND post_type = 'attachment' LIMIT 1",
-        $image_url
-    ));
+    $cache_key = 'smart_store_sync_attachment_guid';
+
+    $existing = wp_cache_get($cache_key, CACHE_GRP);
+
+    if (false === $existing) {
+        // 1) Try dedupe: find existing attachment with same guid.
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+        $existing = $wpdb->get_var($wpdb->prepare(
+            "SELECT ID FROM {$wpdb->posts} WHERE guid = %s AND post_type = 'attachment' LIMIT 1",
+            $image_url
+        ));
+
+        // Cache result (even if null/0)
+        wp_cache_set($cache_key, $existing, CACHE_GRP, CACHE_TTL);
+    }
     if ($existing) {
         // ensure meta exists and return existing ID
         if (! get_post_meta($existing, '_external_image_src', true)) {
@@ -80,8 +93,8 @@ function product_csv_sync_set_product_image_from_url($product_id, $image_url)
  * Ensure gallery thumbnails / img tags include data attributes PhotoSwipe expects
  * when attachment is virtual (external image).
  */
-add_filter('wp_get_attachment_image_attributes', 'product_csv_sync_add_gallery_attrs_for_external', 20, 3);
-function product_csv_sync_add_gallery_attrs_for_external($attr, $attachment, $size)
+add_filter('wp_get_attachment_image_attributes', 'sss_add_gallery_attrs_for_external', 20, 3);
+function sss_add_gallery_attrs_for_external($attr, $attachment, $size)
 {
     $attachment_id = is_object($attachment) && isset($attachment->ID) ? $attachment->ID : intval($attachment);
     if (! $attachment_id) return $attr;
@@ -111,8 +124,8 @@ function product_csv_sync_add_gallery_attrs_for_external($attr, $attachment, $si
 /**
  * Force gallery anchor href and anchor data-size attributes for external images
  */
-add_filter('woocommerce_single_product_image_thumbnail_html', 'product_csv_sync_force_gallery_anchor_href_and_size', 40, 2);
-function product_csv_sync_force_gallery_anchor_href_and_size($html, $post_thumbnail_id)
+add_filter('woocommerce_single_product_image_thumbnail_html', 'sss_force_gallery_anchor_href_and_size', 40, 2);
+function sss_force_gallery_anchor_href_and_size($html, $post_thumbnail_id)
 {
     $attachment_id = intval($post_thumbnail_id);
     if (! $attachment_id) {
@@ -159,8 +172,8 @@ function product_csv_sync_force_gallery_anchor_href_and_size($html, $post_thumbn
 /**
  * image_downsize filter to serve external URL when WP lacks local file.
  */
-add_filter('image_downsize', 'product_csv_sync_image_downsize_for_external', 10, 3);
-function product_csv_sync_image_downsize_for_external($out, $id, $size)
+add_filter('image_downsize', 'sss_image_downsize_for_external', 10, 3);
+function sss_image_downsize_for_external($out, $id, $size)
 {
     // If WP already has a useful result, respect it
     if (! empty($out)) {
@@ -197,8 +210,8 @@ function product_csv_sync_image_downsize_for_external($out, $id, $size)
  * Enqueue tiny JS asset (PhotoSwipe size-fix) on single product pages.
  * The script implements the "simple size fix" you used earlier.
  */
-add_action('wp_enqueue_scripts', 'product_csv_sync_enqueue_photoswipe_fix');
-function product_csv_sync_enqueue_photoswipe_fix()
+add_action('wp_enqueue_scripts', 'sss_enqueue_photoswipe_fix');
+function sss_enqueue_photoswipe_fix()
 {
     if (! is_product()) {
         return;

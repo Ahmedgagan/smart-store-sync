@@ -4,17 +4,30 @@ if (! defined('ABSPATH')) {
     exit;
 }
 
+const CACHE_KEY   = 'smart_store_sync_build_external_map';
+const CACHE_GRP   = 'smart_store_sync';
+const CACHE_TTL       = 600; // seconds (10 minutes) – adjust as you like
+
 /**
  * Build external map
  */
-function product_csv_sync_build_external_map()
+function sss_build_external_map()
 {
     global $wpdb;
     $meta_key = '_external_product_id';
+
+    // Try cache first
+    $cached = wp_cache_get(CACHE_KEY, CACHE_GRP);
+    if (false !== $cached && is_array($cached)) {
+        return $cached;
+    }
+
+    // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
     $results = $wpdb->get_results(
         $wpdb->prepare("SELECT post_id, meta_value FROM {$wpdb->postmeta} WHERE meta_key = %s", $meta_key),
         ARRAY_A
     );
+
     $map = array();
     if (! empty($results)) {
         foreach ($results as $row) {
@@ -25,13 +38,17 @@ function product_csv_sync_build_external_map()
             }
         }
     }
+
+    // Cache it
+    wp_cache_set(CACHE_KEY, $map, CACHE_GRP, CACHE_TTL);
+
     return $map;
 }
 
 /**
  * Map stock status
  */
-function product_csv_sync_map_stock_status($value)
+function sss_map_stock_status($value)
 {
     $value = strtolower(trim($value));
     $in_values  = array('instock', 'in_stock', 'available', '1', 'true', 'yes');
@@ -48,7 +65,7 @@ function product_csv_sync_map_stock_status($value)
 /**
  * Map active -> post status
  */
-function product_csv_sync_map_active_to_status($value)
+function sss_map_active_to_status($value)
 {
     $value = strtolower(trim($value));
     if ($value === '') {

@@ -12,11 +12,11 @@ class MSI_Settings
     {
         $this->data_provider = new MSI_Data_Provider();
 
-        add_action('admin_menu', [$this, 'register_menu']);
-        add_action('admin_init', [$this, 'handle_form_submissions']);
+        add_action('admin_menu', [$this, 'sss_register_menu']);
+        add_action('admin_init', [$this, 'sss_handle_form_submissions']);
     }
 
-    public function register_menu()
+    public function sss_register_menu()
     {
         add_menu_page(
             'Store Import Mapping',
@@ -38,7 +38,7 @@ class MSI_Settings
     /**
      * Handle form submissions for both tabs
      */
-    public function handle_form_submissions()
+    public function sss_handle_form_submissions()
     {
         if (! isset($_POST['store_import_action'])) {
             return;
