@@ -1,5 +1,5 @@
 <?php
-// includes/image-handler.php
+
 if (! defined('ABSPATH')) {
     exit;
 }
@@ -20,33 +20,16 @@ function sss_set_product_image_from_url($product_id, $image_url)
         return 0;
     }
 
-    global $wpdb;
+    $existing = get_posts([
+        'post_type'  => 'attachment',
+        'meta_key'   => '_external_image_src',
+        'meta_value' => $image_url,
+        'fields'     => 'ids',
+        'numberposts' => 1,
+    ]);
 
-    $cache_key = 'smart_store_sync_attachment_guid';
-
-    $existing = wp_cache_get($cache_key, CACHE_GRP);
-
-    if (false === $existing) {
-        // 1) Try dedupe: find existing attachment with same guid.
-        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
-        $existing = $wpdb->get_var($wpdb->prepare(
-            "SELECT ID FROM {$wpdb->posts} WHERE guid = %s AND post_type = 'attachment' LIMIT 1",
-            $image_url
-        ));
-
-        // Cache result (even if null/0)
-        wp_cache_set($cache_key, $existing, CACHE_GRP, CACHE_TTL);
-    }
-    if ($existing) {
-        // ensure meta exists and return existing ID
-        if (! get_post_meta($existing, '_external_image_src', true)) {
-            update_post_meta($existing, '_external_image_src', $image_url);
-        }
-        // ensure _wp_attached_file exists (best-effort)
-        if (! get_post_meta($existing, '_wp_attached_file', true)) {
-            update_post_meta($existing, '_wp_attached_file', $image_url);
-        }
-        return (int) $existing;
+    if (! empty($existing)) {
+        return (int) $existing[0];
     }
 
     // Build an attachment post
@@ -87,6 +70,35 @@ function sss_set_product_image_from_url($product_id, $image_url)
     }
 
     return (int) $attach_id;
+}
+
+function set_gallery_images($product_id, $gallery_urls, $image_url)
+{
+    //handle gallery images
+
+    $gallery_attachment_ids = [];
+
+    foreach ($gallery_urls as $gallery_url) {
+
+        // Skip if same as featured image
+        if ($gallery_url === $image_url) {
+            continue;
+        }
+
+        $att_id = sss_set_product_image_from_url($product_id, $gallery_url);
+
+        if ($att_id) {
+            $gallery_attachment_ids[] = $att_id;
+        }
+    }
+
+    if (! empty($gallery_attachment_ids)) {
+        update_post_meta(
+            $product_id,
+            '_product_image_gallery',
+            implode(',', $gallery_attachment_ids)
+        );
+    }
 }
 
 /**

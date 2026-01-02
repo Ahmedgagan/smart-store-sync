@@ -1,12 +1,12 @@
 <?php
 
-require_once MSI_PATH . 'includes/class-data-provider.php';
-require_once MSI_PATH . 'includes/class-settings.php';
-
 // includes/rest-handler.php
 if (! defined('ABSPATH')) {
     exit;
 }
+
+require_once MSI_PATH . 'includes/class-data-provider.php';
+require_once MSI_PATH . 'includes/class-settings.php';
 
 /**
  * Register REST route
@@ -22,6 +22,28 @@ add_action('rest_api_init', function () {
         )
     );
 });
+
+add_action('init', function () {
+
+    if (taxonomy_exists('product_brand')) {
+        return;
+    }
+
+    register_taxonomy(
+        'product_brand',
+        'product',
+        array(
+            'label'                 => 'Brands',
+            'public'                => true,
+            'hierarchical'          => false,
+            'show_ui'               => true,
+            'show_admin_column'     => true,
+            'show_in_quick_edit'    => true,
+            'rewrite'               => array('slug' => 'brand'),
+        )
+    );
+});
+
 
 /**
  * Main handler
@@ -119,6 +141,7 @@ function sss_handle_request(WP_REST_Request $request)
         $external_product_id = $row['product_id'] ?? '';
         $product_name        = $row['product_name'] ?? '';
         $image_url           = $row['image_url'] ?? '';
+        $image_gallery_raw   = $row['product_images'] ?? '';
         $current_price       = $row['current_price'] ?? '';
         $original_price       = $row['original_price'] ?? '';
         $stock_status_raw    = $row['stock_status'] ?? '';
@@ -131,8 +154,8 @@ function sss_handle_request(WP_REST_Request $request)
         $external_category_id = $row['category_id'];
         $profit_margin = $stored['category_mappings'][$external_store_id][$external_category_id]['profit_margin'] ?? 0;
         $woo_category_ids = array($stored['category_mappings'][$external_store_id][$external_category_id]['wp_category'] ?? 0);
-
-        // print_r($woo_category_ids);
+        $external_brand_id   = $row['brand_id'] ?? '';
+        $external_brand_name = $row['brand_name'] ?? 'test';
 
         $price_with_profit = $current_price;
 
@@ -143,6 +166,10 @@ function sss_handle_request(WP_REST_Request $request)
         if ($original_price < $price_with_profit) {
             $original_price = $price_with_profit;
         }
+
+        $gallery_urls = array_filter(
+            array_map('trim', explode(',', $image_gallery_raw))
+        );
 
         if ($external_product_id === '') {
             if (count($errors) < $max_errors) {
@@ -235,6 +262,8 @@ function sss_handle_request(WP_REST_Request $request)
                 // disable parent stock management (variations manage stock)
                 $parent->set_manage_stock(false);
                 $parent_id = $parent->save();
+                save_brands($external_brand_name, $external_brand_id, $parent_id);
+
                 if (is_wp_error($parent_id)) {
                     if (count($errors) < $max_errors) {
                         $errors[] = array('row' => $row_number, 'product_id' => $external_product_id, 'error' => 'Cannot create variable product: ' . $parent_id->get_error_message());
@@ -259,6 +288,7 @@ function sss_handle_request(WP_REST_Request $request)
                         $product->save();
                     }
                 }
+                set_gallery_images($parent_id, $gallery_urls, $image_url);
             } else {
                 // Ensure product is variable
                 if ($product->get_type() !== 'variable') {
@@ -278,6 +308,7 @@ function sss_handle_request(WP_REST_Request $request)
                     $parent->update_meta_data('_external_store_name', $external_store_name);
                     $parent->update_meta_data('_external_product_url', $external_product_url);
                     $parent->save();
+                    save_brands($external_brand_name, $external_brand_id, $parent_id);
                     $product = wc_get_product($parent_id);
                     $external_map[$external_product_id] = $parent_id;
 
@@ -290,6 +321,8 @@ function sss_handle_request(WP_REST_Request $request)
                             $product->save();
                         }
                     }
+
+                    set_gallery_images($parent_id, $gallery_urls, $image_url);
                 } else {
                     // product exists and is variable — ensure parent has image if not and CSV provides one
                     if (is_array($woo_category_ids) && $woo_category_ids !== $product->get_category_ids()) {
@@ -298,7 +331,7 @@ function sss_handle_request(WP_REST_Request $request)
                     }
 
                     $parent_id = $product->get_id();
-                    if (! $parent_image_id && $image_url !== '') {
+                    if ($image_url !== '') {
                         $parent_image_id = sss_set_product_image_from_url($parent_id, $image_url);
                         if ($parent_image_id) {
                             $product->set_image_id($parent_image_id);
@@ -306,6 +339,9 @@ function sss_handle_request(WP_REST_Request $request)
                             $product->save();
                         }
                     }
+
+                    set_gallery_images($parent_id, $gallery_urls, $image_url);
+                    save_brands($external_brand_name, $external_brand_id, $parent_id);
                 }
             }
 
@@ -518,6 +554,7 @@ function sss_handle_request(WP_REST_Request $request)
                 $product->set_stock_quantity((strtolower(trim($new_wc_status)) === 'in_stock') ? 1000 : 0);
 
                 $product_id = $product->save();
+                save_brands($external_brand_name, $external_brand_id, $product_id);
                 if (is_wp_error($product_id)) {
                     if (count($errors) < $max_errors) {
                         $errors[] = array('row' => $row_number, 'product_id' => $external_product_id, 'error' => $product_id->get_error_message());
@@ -536,6 +573,8 @@ function sss_handle_request(WP_REST_Request $request)
                         $product->update_meta_data('_external_image_src', $image_url);
                     }
                 }
+
+                set_gallery_images($product_id, $gallery_urls, $image_url);
 
                 $product->save();
                 $external_map[$external_product_id] = $product_id;
@@ -582,17 +621,23 @@ function sss_handle_request(WP_REST_Request $request)
                     $needs_save = true;
                 }
 
+                $product_id = $product->get_id();
+
                 if ($image_url !== '') {
                     $previous_src = $product->get_meta('_external_image_src', true);
                     if ($previous_src !== $image_url) {
-                        $attachment_id = sss_set_product_image_from_url($product->get_id(), $image_url);
+                        $attachment_id = sss_set_product_image_from_url($product_id, $image_url);
                         if ($attachment_id) {
                             $product->set_image_id($attachment_id);
                             $product->update_meta_data('_external_image_src', $image_url);
-                            $needs_save = true;
                         }
                     }
+
+                    $needs_save = true;
                 }
+
+                set_gallery_images($product_id, $gallery_urls, $image_url);
+                save_brands($external_brand_name, $external_brand_id, $product_id);
 
                 if ($needs_save) {
                     $result = $product->save();
@@ -625,4 +670,21 @@ function sss_handle_request(WP_REST_Request $request)
         ),
         200
     );
+}
+
+function save_brands($external_brand_name, $external_brand_id, $product_id)
+{
+    $brand_term_id = sss_get_or_create_brand(
+        $external_brand_name,
+        $external_brand_id
+    );
+
+    if ($brand_term_id) {
+        wp_set_object_terms(
+            $product_id,
+            array($brand_term_id),
+            'product_brand',
+            false // replace existing brand
+        );
+    }
 }

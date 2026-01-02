@@ -10,6 +10,12 @@ class MSI_Data_Provider
     const SUBSCRIPTION_DETAILS_ENDPOINT = 'https://api.kodyt.com/api/subscriptions/status';
     const SET_ENABLED_STORED_ENDPOINT = 'https://api.kodyt.com/api/subscriptions/permissions';
     const SET_WOOCOMMERCE_API_KEYS_ENDPOINT = 'https://api.kodyt.com/api/subscriptions/woocommerce';
+    public $site_url;
+
+    public function __construct()
+    {
+        $this->site_url = get_site_url();
+    }
 
     /**
      * Cache key + lifetime (to avoid hitting API on every page load).
@@ -59,10 +65,6 @@ class MSI_Data_Provider
 
     public function get_subscription_details($purchase_token, $reset_catch = false)
     {
-        $site_url = site_url();
-        $parsed_url = wp_parse_url($site_url); // Parse the URL into components
-        $domain = $parsed_url['host'];
-
         // Try cache first
         $cached = get_transient($purchase_token);
         if (is_array($cached) && !$reset_catch) {
@@ -71,7 +73,7 @@ class MSI_Data_Provider
 
         $body_params = array(
             'token' => $purchase_token,
-            'buyer_domain' => $domain,
+            'buyer_domain' => $this->site_url,
         );
 
         $response = wp_remote_post(self::SUBSCRIPTION_DETAILS_ENDPOINT, [
@@ -111,13 +113,9 @@ class MSI_Data_Provider
 
     public function set_active_stores($purchase_token, $enabled_stores)
     {
-        $site_url = site_url();
-        $parsed_url = wp_parse_url($site_url); // Parse the URL into components
-        $domain = $parsed_url['host'];
-
         $body_params = array(
             'token' => $purchase_token,
-            'buyer_domain' => $domain,
+            'buyer_domain' => $this->site_url,
             'store_ids' => $enabled_stores
         );
 
@@ -158,14 +156,9 @@ class MSI_Data_Provider
 
     public function save_secrets($purchase_token, $consumer_key, $consumer_secret)
     {
-        $site_url = site_url();
-        $parsed_url = wp_parse_url($site_url); // Parse the URL into components
-        $domain = $parsed_url['host'];
-
         $body_params = array(
             'token' => $purchase_token,
-            'buyer_domain' => $domain,
-            'subscription_id' => 1,
+            'buyer_domain' => $this->site_url,
             'consumer_secret' => $consumer_secret,
             'consumer_key' => $consumer_key
         );

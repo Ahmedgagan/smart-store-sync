@@ -81,3 +81,57 @@ function sss_map_active_to_status($value)
     }
     return '';
 }
+
+/**
+ * get or create brands
+ */
+
+function sss_get_or_create_brand($brand_name, $external_brand_id = '')
+{
+
+    if (empty($brand_name)) {
+        return 0;
+    }
+
+    // 1. Try exact name match
+    $term = term_exists($brand_name, 'product_brand');
+    echo $term['term_id'];
+    if ($term && ! is_wp_error($term)) {
+        return (int) $term['term_id'];
+    }
+
+    // 2. Try external brand ID match
+    if ($external_brand_id !== '') {
+        $terms = get_terms(array(
+            'taxonomy'   => 'product_brand',
+            'hide_empty' => false,
+            'meta_query' => array(
+                array(
+                    'key'   => '_external_brand_id',
+                    'value' => (string) $external_brand_id,
+                ),
+            ),
+        ));
+
+        if (! is_wp_error($terms) && ! empty($terms)) {
+            return (int) $terms[0]->term_id;
+        }
+    }
+
+    // 3. Create brand
+    $term = wp_insert_term($brand_name, 'product_brand');
+
+    if (is_wp_error($term)) {
+        return 0;
+    }
+
+    if ($external_brand_id !== '') {
+        update_term_meta(
+            $term['term_id'],
+            '_external_brand_id',
+            (string) $external_brand_id
+        );
+    }
+
+    return (int) $term['term_id'];
+}

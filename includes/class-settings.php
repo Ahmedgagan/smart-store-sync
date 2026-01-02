@@ -264,19 +264,28 @@ class MSI_Settings
      */
     private function render_mapping_tab($settings)
     {
-        $stores = $this->get_remote_stores($settings);
+        $stores = [];
+        $subscription_details = $this->get_subscription_details($settings['purchase_token']);
+
+        if ($subscription_details) {
+            $stores = $subscription_details['selected_stores'];
+        }
+
+        // $stores = $this->get_remote_stores($settings);
 
         if (empty($stores)) {
             echo '<p>' . esc_html__('No stores available. Configure and save stores first.', 'smart-store-sync') . '</p>';
             return;
         }
 
+        $store_ids = array_column($stores, 'store_id');
+
         // Selected store (UI navigation only)
         // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- UI state only, no data processing.
-        $selected_store = isset($_GET['store_id']) ? sanitize_text_field(wp_unslash($_GET['store_id'])) : array_key_first($stores);
+        $selected_store = isset($_GET['store_id']) ? sanitize_text_field(wp_unslash($_GET['store_id'])) : intval($store_ids[0]);
 
-        if (! isset($stores[$selected_store])) {
-            $selected_store = array_key_first($stores);
+        if (! isset($stores[array_search($selected_store, $store_ids)])) {
+            $selected_store = $store_ids[0];
         }
 
         // Category data for this store from your scraper/source
@@ -299,8 +308,8 @@ class MSI_Settings
             </label>
             <select name="store_id" id="store_id" onchange="this.form.submit();">
                 <?php foreach ($stores as $store_id => $store) : ?>
-                    <option value="<?php echo esc_attr($store_id); ?>" <?php selected($store_id, $selected_store); ?>>
-                        <?php echo esc_html($store['name'] ?? $store_id); ?>
+                    <option value="<?php echo esc_attr($store['store_id']); ?>" <?php selected($store['store_id'], $selected_store); ?>>
+                        <?php echo esc_html($store['store_name'] ?? $store['store_id']); ?>
                     </option>
                 <?php endforeach; ?>
             </select>
@@ -319,7 +328,7 @@ class MSI_Settings
                 printf(
                     /* translators: %s: store name */
                     esc_html__('Category Mapping for: %s', 'smart-store-sync'),
-                    esc_html($stores[$selected_store]['name'] ?? $selected_store)
+                    esc_html($stores[array_search($selected_store, $store_ids)]['store_name'] ?? $selected_store)
                 );
                 ?>
             </h2>
