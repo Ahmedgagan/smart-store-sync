@@ -4,9 +4,6 @@ if (! defined('ABSPATH')) {
     exit;
 }
 
-const CACHE_GRP   = 'smart_store_sync';
-const CACHE_TTL       = 600; // seconds (10 minutes) – adjust as you like
-
 /**
  * Create (or reuse) a "virtual" attachment pointing to a remote image URL,
  * ensure minimal meta exists so WooCommerce will accept it as a thumbnail,

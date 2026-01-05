@@ -155,7 +155,7 @@ function sss_handle_request(WP_REST_Request $request)
         $profit_margin = $stored['category_mappings'][$external_store_id][$external_category_id]['profit_margin'] ?? 0;
         $woo_category_ids = array($stored['category_mappings'][$external_store_id][$external_category_id]['wp_category'] ?? 0);
         $external_brand_id   = $row['brand_id'] ?? '';
-        $external_brand_name = $row['brand_name'] ?? 'test';
+        $external_brand_name = $row['brand_name'] ?? '';
 
         $price_with_profit = $current_price;
 

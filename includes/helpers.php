@@ -95,7 +95,7 @@ function sss_get_or_create_brand($brand_name, $external_brand_id = '')
 
     // 1. Try exact name match
     $term = term_exists($brand_name, 'product_brand');
-    echo $term['term_id'];
+
     if ($term && ! is_wp_error($term)) {
         return (int) $term['term_id'];
     }

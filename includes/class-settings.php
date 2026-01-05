@@ -19,10 +19,10 @@ class MSI_Settings
     public function sss_register_menu()
     {
         add_menu_page(
-            'Store Import Mapping',
-            'Store Import Mapping',
+            'Smart Store Sync',
+            'Smart Store Sync',
             'manage_woocommerce',
-            'store-import-mapping',
+            'smart-store-sync',
             [$this, 'render_settings_page']
         );
     }
@@ -61,14 +61,14 @@ class MSI_Settings
 
                 if ($this->update_secrets($settings, $purchase_token, $consumer_key, $consumer_secret)) {
                     add_settings_error(
-                        'store-import-mapping',
+                        'smart-store-sync',
                         'store_import_purchase_token_saved',
                         __('Secrets Saved Successfully.', 'smart-store-sync'),
                         'updated'
                     );
                 } else {
                     add_settings_error(
-                        'store-import-mapping',
+                        'smart-store-sync',
                         'store_import_purchase_token_saved',
                         __('Error Saving Secrets.', 'smart-store-sync'),
                         'Error'
@@ -83,7 +83,7 @@ class MSI_Settings
                 $this->update_enabled_stores($settings, $enabled_stores);
 
                 add_settings_error(
-                    'store-import-mapping',
+                    'smart-store-sync',
                     'store_import_stores_saved',
                     __('Stores selection saved.', 'smart-store-sync'),
                     'updated'
@@ -132,7 +132,7 @@ class MSI_Settings
                     $this->update_settings($settings);
 
                     add_settings_error(
-                        'store-import-mapping',
+                        'smart-store-sync',
                         'store_import_mappings_saved',
                         __('Category mappings saved.', 'smart-store-sync'),
                         'updated'
@@ -158,10 +158,10 @@ class MSI_Settings
         // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- UI state only.
         $active_tab = isset($_GET['tab']) ? sanitize_key(wp_unslash($_GET['tab'])) : 'settings';
 
-        settings_errors('store-import-mapping');
+        settings_errors('smart-store-sync');
 
         echo '<div class="wrap">';
-        echo '<h1>' . esc_html__('Store Import Mapping', 'smart-store-sync') . '</h1>';
+        echo '<h1>' . esc_html__('Smart Store Sync', 'smart-store-sync') . '</h1>';
 
         echo '<h2 class="nav-tab-wrapper">';
         $this->render_tab_link('settings', __('Account & Plan', 'smart-store-sync'), $active_tab);
@@ -184,7 +184,7 @@ class MSI_Settings
     {
         $url = add_query_arg(
             [
-                'page' => 'store-import-mapping',
+                'page' => 'smart-store-sync',
                 'tab'  => $tab,
             ],
             admin_url('admin.php')
@@ -299,8 +299,8 @@ class MSI_Settings
         $wp_categories = $this->get_woocommerce_product_cats();
 
     ?>
-        <form method="get" style="margin-bottom: 20px;">
-            <input type="hidden" name="page" value="store-import-mapping" />
+        <form method="get" style="margin-bottom: 20px;margin-top: 20px;">
+            <input type="hidden" name="page" value="smart-store-sync" />
             <input type="hidden" name="tab" value="mapping" />
 
             <label for="store_id">
@@ -332,21 +332,6 @@ class MSI_Settings
                 );
                 ?>
             </h2>
-
-            <p>
-                <label for="fallback_category">
-                    <?php esc_html_e('Fallback WooCommerce category (used when no specific mapping exists):', 'smart-store-sync'); ?>
-                </label>
-                <br />
-                <select name="fallback_category" id="fallback_category">
-                    <option value="0"><?php esc_html_e('— None —', 'smart-store-sync'); ?></option>
-                    <?php foreach ($wp_categories as $cat) : ?>
-                        <option value="<?php echo esc_attr($cat->term_id); ?>" <?php selected($cat->term_id, $fallback); ?>>
-                            <?php echo esc_html($cat->name); ?>
-                        </option>
-                    <?php endforeach; ?>
-                </select>
-            </p>
 
             <?php if (empty($categories)) : ?>
                 <p><?php esc_html_e('No categories found for this store.', 'smart-store-sync'); ?></p>

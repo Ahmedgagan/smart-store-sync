@@ -6,10 +6,11 @@ if (! defined('ABSPATH')) {
 
 class MSI_Data_Provider
 {
-    const STORES_ENDPOINT = 'https://api.kodyt.com/api/stores';
-    const SUBSCRIPTION_DETAILS_ENDPOINT = 'https://api.kodyt.com/api/subscriptions/status';
-    const SET_ENABLED_STORED_ENDPOINT = 'https://api.kodyt.com/api/subscriptions/permissions';
-    const SET_WOOCOMMERCE_API_KEYS_ENDPOINT = 'https://api.kodyt.com/api/subscriptions/woocommerce';
+    const BASE_URL = 'https://api.smartstoresync.com/api';
+    const STORES_ENDPOINT = self::BASE_URL . '/stores';
+    const SUBSCRIPTION_DETAILS_ENDPOINT = self::BASE_URL . '/subscriptions/status';
+    const SET_ENABLED_STORED_ENDPOINT = self::BASE_URL . '/subscriptions/permissions';
+    const SET_WOOCOMMERCE_API_KEYS_ENDPOINT = self::BASE_URL . '/subscriptions/woocommerce';
     public $site_url;
 
     public function __construct()
