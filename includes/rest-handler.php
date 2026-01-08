@@ -273,6 +273,10 @@ function sss_handle_request(WP_REST_Request $request)
                 $parent->update_meta_data('_external_product_id', $external_product_id);
                 $parent->update_meta_data('_external_store_name', $external_store_name);
                 $parent->update_meta_data('_external_product_url', $external_product_url);
+                $parent->update_meta_data('_external_current_price', $current_price);
+                $parent->update_meta_data('_external_orignal_price', $original_price);
+                $parent->update_meta_data('_external_category_id', $external_category_id);
+                $parent->update_meta_data('_external_store_id', $external_store_id);
                 $parent->save();
                 $product = wc_get_product($parent_id);
                 $external_map[$external_product_id] = $parent_id;
@@ -288,6 +292,7 @@ function sss_handle_request(WP_REST_Request $request)
                         $product->save();
                     }
                 }
+
                 set_gallery_images($parent_id, $gallery_urls, $image_url);
             } else {
                 // Ensure product is variable
@@ -307,6 +312,10 @@ function sss_handle_request(WP_REST_Request $request)
                     $parent->update_meta_data('_external_product_id', $external_product_id);
                     $parent->update_meta_data('_external_store_name', $external_store_name);
                     $parent->update_meta_data('_external_product_url', $external_product_url);
+                    $parent->update_meta_data('_external_current_price', $current_price);
+                    $parent->update_meta_data('_external_orignal_price', $original_price);
+                    $parent->update_meta_data('_external_category_id', $external_category_id);
+                    $parent->update_meta_data('_external_store_id', $external_store_id);
                     $parent->save();
                     save_brands($external_brand_name, $external_brand_id, $parent_id);
                     $product = wc_get_product($parent_id);
@@ -325,6 +334,10 @@ function sss_handle_request(WP_REST_Request $request)
                     set_gallery_images($parent_id, $gallery_urls, $image_url);
                 } else {
                     // product exists and is variable — ensure parent has image if not and CSV provides one
+                    $product->update_meta_data('_external_current_price', $current_price);
+                    $product->update_meta_data('_external_orignal_price', $original_price);
+                    $product->update_meta_data('_external_category_id', $external_category_id);
+                    $product->update_meta_data('_external_store_id', $external_store_id);
                     if (is_array($woo_category_ids) && $woo_category_ids !== $product->get_category_ids()) {
                         $product->set_category_ids($woo_category_ids);
                         $product->save();
@@ -574,6 +587,10 @@ function sss_handle_request(WP_REST_Request $request)
                     }
                 }
 
+                $product->update_meta_data('_external_current_price', $current_price);
+                $product->update_meta_data('_external_orignal_price', $original_price);
+                $product->update_meta_data('_external_category_id', $external_category_id);
+                $product->update_meta_data('_external_store_id', $external_store_id);
                 set_gallery_images($product_id, $gallery_urls, $image_url);
 
                 $product->save();
@@ -636,6 +653,10 @@ function sss_handle_request(WP_REST_Request $request)
                     $needs_save = true;
                 }
 
+                $product->update_meta_data('_external_current_price', $current_price);
+                $product->update_meta_data('_external_orignal_price', $original_price);
+                $product->update_meta_data('_external_category_id', $external_category_id);
+                $product->update_meta_data('_external_store_id', $external_store_id);
                 set_gallery_images($product_id, $gallery_urls, $image_url);
                 save_brands($external_brand_name, $external_brand_id, $product_id);
 

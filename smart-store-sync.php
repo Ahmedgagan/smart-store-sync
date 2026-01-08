@@ -18,6 +18,7 @@ define('MSI_PATH', plugin_dir_path(__FILE__));
 define('MSI_URL',  plugin_dir_url(__FILE__));
 
 // core includes
+require_once MSI_PATH . 'includes/product-normalization.php';
 require_once MSI_PATH . 'includes/class-data-provider.php';
 require_once MSI_PATH . 'includes/class-settings.php';
 

@@ -80,6 +80,9 @@ class MSI_Settings
                 $default_profit_margin = isset($_POST['default_profit_margin']) ? sanitize_text_field(wp_unslash($_POST['default_profit_margin'])) : '';
 
                 if ($this->save_settings($settings, $purchase_token, $default_profit_margin)) {
+                    if ($settings['default_profit_margin'] != $default_profit_margin) {
+                        fix_profit_margin_and_categories();
+                    }
                     add_settings_error(
                         'smart-store-sync',
                         'store_import_settings_saved',
@@ -147,9 +150,19 @@ class MSI_Settings
                         $settings['category_mappings'] = [];
                     }
 
+                    $update_price_or_category = false;
+
+                    if ($settings['category_mappings'][$store_id] != $mappings) {
+                        $update_price_or_category = true;
+                    }
+
                     $settings['category_mappings'][$store_id] = $mappings;
 
                     $this->update_settings($settings);
+
+                    if ($update_price_or_category) {
+                        fix_profit_margin_and_categories();
+                    }
 
                     add_settings_error(
                         'smart-store-sync',
