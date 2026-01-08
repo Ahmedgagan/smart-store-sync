@@ -152,7 +152,7 @@ function sss_handle_request(WP_REST_Request $request)
         $external_store_name = $row['store_name'];
         $external_product_url = $row['product_url'];
         $external_category_id = $row['category_id'];
-        $profit_margin = $stored['category_mappings'][$external_store_id][$external_category_id]['profit_margin'] ?? 0;
+        $profit_margin = $stored['category_mappings'][$external_store_id][$external_category_id]['profit_margin'] ?? ($stored["default_profit_margin"] ?? 1000);
         $woo_category_ids = array($stored['category_mappings'][$external_store_id][$external_category_id]['wp_category'] ?? 0);
         $external_brand_id   = $row['brand_id'] ?? '';
         $external_brand_name = $row['brand_name'] ?? '';

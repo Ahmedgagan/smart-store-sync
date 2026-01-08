@@ -54,7 +54,7 @@ class MSI_Settings
 
         switch ($_POST['store_import_action']) {
 
-            case 'save_purchase_token':
+            case 'save_woocommerce_credentials':
                 $purchase_token = isset($_POST['purchase_token']) ? sanitize_text_field(wp_unslash($_POST['purchase_token'])) : '';
                 $consumer_key = isset($_POST['consumer_key']) ? sanitize_text_field(wp_unslash($_POST['consumer_key'])) : '';
                 $consumer_secret = isset($_POST['consumer_secret']) ? sanitize_text_field(wp_unslash($_POST['consumer_secret'])) : '';
@@ -71,6 +71,26 @@ class MSI_Settings
                         'smart-store-sync',
                         'store_import_purchase_token_saved',
                         __('Error Saving Secrets.', 'smart-store-sync'),
+                        'Error'
+                    );
+                }
+                break;
+            case 'save_settings':
+                $purchase_token = isset($_POST['purchase_token']) ? sanitize_text_field(wp_unslash($_POST['purchase_token'])) : '';
+                $default_profit_margin = isset($_POST['default_profit_margin']) ? sanitize_text_field(wp_unslash($_POST['default_profit_margin'])) : '';
+
+                if ($this->save_settings($settings, $purchase_token, $default_profit_margin)) {
+                    add_settings_error(
+                        'smart-store-sync',
+                        'store_import_settings_saved',
+                        __('Settings Saved Successfully.', 'smart-store-sync'),
+                        'updated'
+                    );
+                } else {
+                    add_settings_error(
+                        'smart-store-sync',
+                        'store_import_not_settings_saved',
+                        __('Error Saving Settings.', 'smart-store-sync'),
                         'Error'
                     );
                 }
@@ -391,6 +411,7 @@ class MSI_Settings
         $purchase_token = $settings['purchase_token'];
         $consumer_key = $settings['consumer_key'];
         $consumer_secret = $settings['consumer_secret'];
+        $default_profit_margin = $settings['default_profit_margin'] ?? 1000;
         $subscription_details = $this->get_subscription_details($purchase_token);
     ?>
         <!-- 🔒 NOT ACTIVATED STATE -->
@@ -403,7 +424,7 @@ class MSI_Settings
 
         <form method="post">
             <?php wp_nonce_field('store_import_save', 'store_import_nonce'); ?>
-            <input type="hidden" name="store_import_action" value="save_purchase_token" />
+            <input type="hidden" name="store_import_action" value="save_settings" />
             <table class="form-table">
                 <tr>
                     <th scope="row">Purchase Token</th>
@@ -421,6 +442,33 @@ class MSI_Settings
                         </p>
                     </td>
                 </tr>
+                <tr>
+                    <th scope="row">Default Profit Margin</th>
+                    <td>
+                        <input
+                            type="text"
+                            name="default_profit_margin"
+                            class="regular-text"
+                            value="<?php echo esc_attr($default_profit_margin); ?>"
+                            placeholder="1000" />
+                        <p class="description">
+                            Enter the Default Profit Margin You Want for your Products
+                        </p>
+                    </td>
+                </tr>
+            </table>
+
+            <p class="submit">
+                <button type="submit" class="button button-primary">
+                    <?php esc_html_e('Save & Verify', 'smart-store-sync'); ?>
+                </button>
+            </p>
+        </form>
+
+        <form method="post">
+            <?php wp_nonce_field('store_import_save', 'store_import_nonce'); ?>
+            <input type="hidden" name="store_import_action" value="save_woocommerce_credentials" />
+            <table class="form-table">
                 <tr>
                     <th scope="row">Woocommerce Customer Key</th>
                     <td>
@@ -457,7 +505,7 @@ class MSI_Settings
 
             <p class="submit">
                 <button type="submit" class="button button-primary">
-                    <?php esc_html_e('Save & Verify', 'smart-store-sync'); ?>
+                    <?php esc_html_e('Save Credentials', 'smart-store-sync'); ?>
                 </button>
             </p>
         </form>
@@ -533,6 +581,15 @@ class MSI_Settings
     private function update_settings($settings)
     {
         update_option(self::OPTION_KEY, $settings);
+    }
+
+    private function save_settings($settings, $purchase_token, $default_profit_margin)
+    {
+        $settings['purchase_token'] = $purchase_token;
+        $settings['default_profit_margin'] = $default_profit_margin;
+
+        $this->update_settings($settings);
+        return true;
     }
 
     private function update_secrets($settings, $purchase_token, $consumer_key, $consumer_secret)
