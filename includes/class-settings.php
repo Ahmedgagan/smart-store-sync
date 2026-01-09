@@ -161,7 +161,7 @@ class MSI_Settings
                     $this->update_settings($settings);
 
                     if ($update_price_or_category) {
-                        fix_profit_margin_and_categories();
+                        fix_profit_margin_and_categories($store_id);
                     }
 
                     add_settings_error(

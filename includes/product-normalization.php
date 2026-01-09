@@ -3,15 +3,32 @@ if (! defined('ABSPATH')) {
   exit;
 }
 
-function fix_profit_margin_and_categories()
+function fix_profit_margin_and_categories($store_id = 0)
 {
+  $product_ids = null;
 
-  $product_ids = get_posts([
-    'post_type'      => 'product',
-    'post_status'    => 'publish',
-    'posts_per_page' => -1,
-    'fields'         => 'ids',
-  ]);
+  if ($store_id > 0) {
+    $product_ids = get_posts([
+      'post_type'      => 'product',
+      'post_status'    => 'publish',
+      'posts_per_page' => -1,
+      'fields'         => 'ids',
+      'meta_query'     => [
+        [
+          'key'     => '_external_store_id',
+          'value'   => $store_id,
+          'compare' => '=',
+        ],
+      ],
+    ]);
+  } else {
+    $product_ids = get_posts([
+      'post_type'      => 'product',
+      'post_status'    => 'publish',
+      'posts_per_page' => -1,
+      'fields'         => 'ids',
+    ]);
+  }
 
   $stored = get_option('store_import_settings', []);
 
