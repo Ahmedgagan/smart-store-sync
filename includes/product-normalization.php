@@ -41,10 +41,34 @@ function fix_profit_margin_and_categories($store_id = 0)
 
     $external_store_id = get_post_meta($product_id, '_external_store_id', true);
     $external_category_id = get_post_meta($product_id, '_external_category_id', true);
+    $external_category_ids_raw = get_post_meta($product_id, '_external_category_ids', true);
 
-    $profit_margin = $stored['category_mappings'][$external_store_id][$external_category_id]['profit_margin'] ?? ($stored["default_profit_margin"] ?? 1000);
+    $external_category_ids = [];
+    if (is_array($external_category_ids_raw)) {
+      $external_category_ids = array_values(array_filter(array_map('strval', $external_category_ids_raw)));
+    } elseif (is_string($external_category_ids_raw) && $external_category_ids_raw !== '') {
+      $tokens = array_filter(array_map('trim', explode(',', $external_category_ids_raw)), function ($t) {
+        return $t !== '';
+      });
+      $external_category_ids = array_values(array_unique($tokens));
+    } elseif ($external_category_id !== '') {
+      $external_category_ids = [(string) $external_category_id];
+    }
 
-    $woo_category_ids = array($stored['category_mappings'][$external_store_id][$external_category_id]['wp_category'] ?? 0);
+    $default_profit_margin = $stored["default_profit_margin"] ?? 1000;
+    $profit_margin = $default_profit_margin;
+    $woo_category_ids = [];
+    foreach ($external_category_ids as $cat_id) {
+      $mapped_wp_cat = $stored['category_mappings'][$external_store_id][$cat_id]['wp_category'] ?? 0;
+      if ($mapped_wp_cat) {
+        $woo_category_ids[] = (int) $mapped_wp_cat;
+      }
+      $cat_margin = $stored['category_mappings'][$external_store_id][$cat_id]['profit_margin'] ?? $default_profit_margin;
+      if ($cat_margin > $profit_margin) {
+        $profit_margin = $cat_margin;
+      }
+    }
+    $woo_category_ids = array_values(array_unique(array_filter($woo_category_ids)));
 
     $product->set_category_ids($woo_category_ids);
 

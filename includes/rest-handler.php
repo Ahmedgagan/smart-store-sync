@@ -151,12 +151,40 @@ function sss_handle_request(WP_REST_Request $request)
         $external_store_id = $row['store_id'];
         $external_store_name = $row['store_name'];
         $external_product_url = $row['product_url'];
-        $external_category_id = $row['category_id'];
-        $profit_margin = $stored['category_mappings'][$external_store_id][$external_category_id]['profit_margin'] ?? ($stored["default_profit_margin"] ?? 1000);
-        $woo_category_ids = array($stored['category_mappings'][$external_store_id][$external_category_id]['wp_category'] ?? 0);
+        $categories_raw = $row['categories'] ?? '';
+        $external_category_ids = [];
+        if ($categories_raw !== '') {
+            $tokens = array_filter(array_map('trim', explode(',', $categories_raw)), function ($t) {
+                return $t !== '';
+            });
+            $external_category_ids = array_values(array_unique($tokens));
+        } elseif (isset($row['category_id']) && $row['category_id'] !== '') {
+            $external_category_ids = [(string) $row['category_id']];
+        }
+
+        $external_category_id = $external_category_ids[0] ?? '';
+        $default_profit_margin = $stored["default_profit_margin"] ?? 1000;
+        $profit_margin = $default_profit_margin;
+        $woo_category_ids = [];
+        foreach ($external_category_ids as $cat_id) {
+            $mapped_wp_cat = $stored['category_mappings'][$external_store_id][$cat_id]['wp_category'] ?? 0;
+            if ($mapped_wp_cat) {
+                $woo_category_ids[] = (int) $mapped_wp_cat;
+            }
+            $cat_margin = $stored['category_mappings'][$external_store_id][$cat_id]['profit_margin'] ?? $default_profit_margin;
+            if ($cat_margin > $profit_margin) {
+                $profit_margin = $cat_margin;
+            }
+        }
+        $woo_category_ids = array_values(array_unique(array_filter($woo_category_ids)));
+        $external_category_ids_csv = implode(',', $external_category_ids);
         $external_brand_id   = $row['brand_id'] ?? '';
         $external_brand_name = $row['brand_name'] ?? '';
-
+        $short_description_raw = $row['short_description'] ?? '';
+        $short_description = $short_description_raw !== '' ? sss_sanitize_product_html(sss_normalize_video_html($short_description_raw)) : '';
+        $description_raw = $row['description'] ?? '';
+        $description = $description_raw !== '' ? sss_sanitize_product_html(sss_normalize_video_html($description_raw)) : '';
+        $attributes_raw      = $row['attributes'] ?? '';
         $price_with_profit = $current_price;
 
         if ($profit_margin) {
@@ -200,32 +228,50 @@ function sss_handle_request(WP_REST_Request $request)
             }
         }
 
-        // VARIANTS HANDLING: supports JSON array (detailed) OR simple comma-separated list
+        // VARIANTS HANDLING: supports JSON array (detailed) OR simple name/value list
         if ($has_variants) {
 
             // Try JSON first
             $variants = json_decode($variants_raw, true);
 
-            // If not JSON array, fallback to comma-separated list => treat as size list
-            if (! is_array($variants)) {
-                // split by comma
-                $tokens = array_filter(array_map('trim', explode(',', $variants_raw)), function ($t) {
-                    return $t !== '';
-                });
-                $variants = array();
-
-                foreach ($tokens as $tk) {
-                    // each token becomes a minimal variant with attributes => ['size' => $tk]
-                    $variants[] = array(
-                        'sku' => '', // will be generated below if empty
-                        'sale_price' => $price_with_profit ?: '',
-                        'orignal_price' => $original_price ?: '',
-                        'stock_status' => $stock_status_raw ?: '',
-                        'stock_quantity' => (strtolower(trim($stock_status_raw)) === 'in_stock') ? 1000 : 0,
-                        'image_url' => '', // leave empty so variation uses parent image
-                        'attributes' => array('size' => $tk),
-                    );
+            // If JSON array is a simple name/value list, normalize into variants
+            if (is_array($variants) && ! empty($variants)) {
+                $looks_like_name_value = true;
+                foreach ($variants as $v) {
+                    if (! is_array($v) || ! isset($v['name'], $v['value'])) {
+                        $looks_like_name_value = false;
+                        break;
+                    }
                 }
+
+                if ($looks_like_name_value) {
+                    $normalized = array();
+                    foreach ($variants as $v) {
+                        $attr_name = strtolower(trim((string) $v['name']));
+                        $attr_value = (string) $v['value'];
+                        if ($attr_name === '' || $attr_value === '') {
+                            continue;
+                        }
+
+                        $normalized[] = array(
+                            'sku' => '', // will be generated below if empty
+                            'sale_price' => $price_with_profit ?: '',
+                            'orignal_price' => $original_price ?: '',
+                            'stock_status' => $stock_status_raw ?: '',
+                            'stock_quantity' => (strtolower(trim($stock_status_raw)) === 'in_stock') ? 1000 : 0,
+                            'image_url' => '', // leave empty so variation uses parent image
+                            'attributes' => array($attr_name => $attr_value),
+                        );
+                    }
+                    $variants = $normalized;
+                }
+            }
+
+            if (! is_array($variants) || empty($variants)) {
+                if (count($errors) < $max_errors) {
+                    $errors[] = array('row' => $row_number, 'product_id' => $external_product_id, 'error' => 'Invalid or empty variants JSON.');
+                }
+                continue;
             }
 
             // gather attribute values from variants (we'll use local attributes on parent)
@@ -252,6 +298,12 @@ function sss_handle_request(WP_REST_Request $request)
             if (! $product) {
                 $parent = new WC_Product_Variable();
                 $parent->set_name($product_name ?: 'Variant product ' . $external_product_id);
+                if ($short_description !== '') {
+                    $parent->set_short_description($short_description);
+                }
+                if ($description !== '') {
+                    $parent->set_description($description);
+                }
                 if ($new_post_status) {
                     $parent->set_status($new_post_status);
                 }
@@ -276,6 +328,7 @@ function sss_handle_request(WP_REST_Request $request)
                 $parent->update_meta_data('_external_current_price', $current_price);
                 $parent->update_meta_data('_external_orignal_price', $original_price);
                 $parent->update_meta_data('_external_category_id', $external_category_id);
+                $parent->update_meta_data('_external_category_ids', $external_category_ids_csv);
                 $parent->update_meta_data('_external_store_id', $external_store_id);
                 $parent->save();
                 $product = wc_get_product($parent_id);
@@ -300,6 +353,12 @@ function sss_handle_request(WP_REST_Request $request)
                     // convert/create new variable product and update map
                     $parent = new WC_Product_Variable();
                     $parent->set_name($product_name ?: $product->get_name());
+                    if ($short_description !== '') {
+                        $parent->set_short_description($short_description);
+                    }
+                    if ($description !== '') {
+                        $parent->set_description($description);
+                    }
 
                     if ($new_post_status) {
                         $parent->set_status($new_post_status);
@@ -315,6 +374,7 @@ function sss_handle_request(WP_REST_Request $request)
                     $parent->update_meta_data('_external_current_price', $current_price);
                     $parent->update_meta_data('_external_orignal_price', $original_price);
                     $parent->update_meta_data('_external_category_id', $external_category_id);
+                    $parent->update_meta_data('_external_category_ids', $external_category_ids_csv);
                     $parent->update_meta_data('_external_store_id', $external_store_id);
                     $parent->save();
                     save_brands($external_brand_name, $external_brand_id, $parent_id);
@@ -337,9 +397,18 @@ function sss_handle_request(WP_REST_Request $request)
                     $product->update_meta_data('_external_current_price', $current_price);
                     $product->update_meta_data('_external_orignal_price', $original_price);
                     $product->update_meta_data('_external_category_id', $external_category_id);
+                    $product->update_meta_data('_external_category_ids', $external_category_ids_csv);
                     $product->update_meta_data('_external_store_id', $external_store_id);
                     if (is_array($woo_category_ids) && $woo_category_ids !== $product->get_category_ids()) {
                         $product->set_category_ids($woo_category_ids);
+                        $product->save();
+                    }
+                    if ($short_description !== '') {
+                        $product->set_short_description($short_description);
+                        $product->save();
+                    }
+                    if ($description !== '') {
+                        $product->set_description($description);
                         $product->save();
                     }
 
@@ -380,6 +449,15 @@ function sss_handle_request(WP_REST_Request $request)
             }
 
             try {
+                $extra_attributes = sss_build_non_variant_attributes_for_product(
+                    $parent_id,
+                    $attributes_raw,
+                    $errors,
+                    $row_number,
+                    $external_product_id
+                );
+                $parent_attributes = sss_merge_product_attributes($parent_attributes, $extra_attributes);
+
                 if (! empty($parent_attributes)) {
                     $product->set_attributes($parent_attributes);
                     $product->save();
@@ -551,6 +629,12 @@ function sss_handle_request(WP_REST_Request $request)
             try {
                 $product = new WC_Product_Simple();
                 $product->set_name($product_name);
+                if ($short_description !== '') {
+                    $product->set_short_description($short_description);
+                }
+                if ($description !== '') {
+                    $product->set_description($description);
+                }
                 if ($current_price !== '') {
                     $product->set_sale_price($price_with_profit);
                     $product->set_regular_price($original_price);
@@ -590,8 +674,20 @@ function sss_handle_request(WP_REST_Request $request)
                 $product->update_meta_data('_external_current_price', $current_price);
                 $product->update_meta_data('_external_orignal_price', $original_price);
                 $product->update_meta_data('_external_category_id', $external_category_id);
+                $product->update_meta_data('_external_category_ids', $external_category_ids_csv);
                 $product->update_meta_data('_external_store_id', $external_store_id);
                 set_gallery_images($product_id, $gallery_urls, $image_url);
+                $extra_attributes = sss_build_non_variant_attributes_for_product(
+                    $product_id,
+                    $attributes_raw,
+                    $errors,
+                    $row_number,
+                    $external_product_id
+                );
+                $merged = sss_merge_product_attributes($product->get_attributes(), $extra_attributes);
+                if (! empty($merged)) {
+                    $product->set_attributes($merged);
+                }
 
                 $product->save();
                 $external_map[$external_product_id] = $product_id;
@@ -620,6 +716,15 @@ function sss_handle_request(WP_REST_Request $request)
 
                 if ($new_post_status && $new_post_status !== $current_post_stat) {
                     $product->set_status($new_post_status);
+                    $needs_save = true;
+                }
+
+                if ($short_description !== '' && $short_description !== $product->get_short_description()) {
+                    $product->set_short_description($short_description);
+                    $needs_save = true;
+                }
+                if ($description !== '' && $description !== $product->get_description()) {
+                    $product->set_description($description);
                     $needs_save = true;
                 }
 
@@ -656,9 +761,23 @@ function sss_handle_request(WP_REST_Request $request)
                 $product->update_meta_data('_external_current_price', $current_price);
                 $product->update_meta_data('_external_orignal_price', $original_price);
                 $product->update_meta_data('_external_category_id', $external_category_id);
+                $product->update_meta_data('_external_category_ids', $external_category_ids_csv);
                 $product->update_meta_data('_external_store_id', $external_store_id);
                 set_gallery_images($product_id, $gallery_urls, $image_url);
                 save_brands($external_brand_name, $external_brand_id, $product_id);
+
+                $extra_attributes = sss_build_non_variant_attributes_for_product(
+                    $product_id,
+                    $attributes_raw,
+                    $errors,
+                    $row_number,
+                    $external_product_id
+                );
+                $merged = sss_merge_product_attributes($product->get_attributes(), $extra_attributes);
+                if (! empty($merged)) {
+                    $product->set_attributes($merged);
+                    $needs_save = true;
+                }
 
                 if ($needs_save) {
                     $result = $product->save();
@@ -691,6 +810,252 @@ function sss_handle_request(WP_REST_Request $request)
         ),
         200
     );
+}
+
+function sss_build_non_variant_attributes_for_product($product_id, $attributes_raw, &$errors, $row_number, $external_product_id)
+{
+    if (! $attributes_raw) {
+        return [];
+    }
+
+    $data = json_decode($attributes_raw, true);
+    if (! is_array($data)) {
+        if (count($errors) < 200) {
+            $errors[] = array('row' => $row_number, 'product_id' => $external_product_id, 'error' => 'Invalid attributes JSON.');
+        }
+        return [];
+    }
+
+    $attributes = [];
+
+    foreach ($data as $attr) {
+        if (! is_array($attr)) {
+            continue;
+        }
+
+        $taxonomy = isset($attr['taxonomy']) ? (string) $attr['taxonomy'] : '';
+        $attr_label = isset($attr['name']) ? (string) $attr['name'] : '';
+        $has_variations = ! empty($attr['has_variations']);
+        if (! $taxonomy || $has_variations) {
+            // Skip variation attributes here; variation attributes are handled by variants.
+            continue;
+        }
+
+        if (! taxonomy_exists($taxonomy)) {
+            if (! sss_ensure_attribute_taxonomy($taxonomy, $attr_label)) {
+                if (count($errors) < 200) {
+                    $errors[] = array('row' => $row_number, 'product_id' => $external_product_id, 'error' => 'Unknown attribute taxonomy: ' . $taxonomy);
+                }
+                continue;
+            }
+        }
+
+        if (! taxonomy_exists($taxonomy)) {
+            if (count($errors) < 200) {
+                $errors[] = array('row' => $row_number, 'product_id' => $external_product_id, 'error' => 'Unknown attribute taxonomy: ' . $taxonomy);
+            }
+            continue;
+        }
+
+        $terms = isset($attr['terms']) && is_array($attr['terms']) ? $attr['terms'] : [];
+        $term_ids = [];
+        foreach ($terms as $term) {
+            if (! is_array($term)) {
+                continue;
+            }
+            $term_name = isset($term['name']) ? (string) $term['name'] : '';
+            $term_slug = isset($term['slug']) ? (string) $term['slug'] : '';
+
+            $existing = null;
+            if ($term_slug !== '') {
+                $existing = term_exists($term_slug, $taxonomy);
+            }
+            if (! $existing && $term_name !== '') {
+                $existing = term_exists($term_name, $taxonomy);
+            }
+
+            if (! $existing && $term_name !== '') {
+                $inserted = wp_insert_term($term_name, $taxonomy, $term_slug ? ['slug' => $term_slug] : []);
+                if (! is_wp_error($inserted)) {
+                    $term_ids[] = (int) $inserted['term_id'];
+                }
+            } elseif (is_array($existing) && isset($existing['term_id'])) {
+                $term_ids[] = (int) $existing['term_id'];
+            } elseif (is_int($existing)) {
+                $term_ids[] = (int) $existing;
+            }
+        }
+
+        $term_ids = array_values(array_unique(array_filter($term_ids)));
+        if (empty($term_ids)) {
+            continue;
+        }
+
+        wp_set_object_terms($product_id, $term_ids, $taxonomy, false);
+
+        $attr_obj = new WC_Product_Attribute();
+        $attr_obj->set_id(isset($attr['id']) ? (int) $attr['id'] : 0);
+        $attr_obj->set_name($taxonomy);
+        $attr_obj->set_options($term_ids);
+        $attr_obj->set_position(0);
+        $attr_obj->set_visible(true);
+        $attr_obj->set_variation(false);
+        $attributes[] = $attr_obj;
+    }
+
+    return $attributes;
+}
+
+function sss_merge_product_attributes($base_attributes, $extra_attributes)
+{
+    if (empty($extra_attributes)) {
+        return $base_attributes ?: [];
+    }
+
+    $merged = [];
+    foreach ((array) $base_attributes as $attr) {
+        if (! $attr instanceof WC_Product_Attribute) {
+            continue;
+        }
+        $merged[$attr->get_name()] = $attr;
+    }
+
+    foreach ((array) $extra_attributes as $attr) {
+        if (! $attr instanceof WC_Product_Attribute) {
+            continue;
+        }
+
+        $name = $attr->get_name();
+        if (isset($merged[$name])) {
+            $existing = $merged[$name];
+            $options = array_unique(array_merge($existing->get_options(), $attr->get_options()));
+            $existing->set_options(array_values($options));
+            if ($attr->get_variation()) {
+                $existing->set_variation(true);
+            }
+            $merged[$name] = $existing;
+        } else {
+            $merged[$name] = $attr;
+        }
+    }
+
+    return array_values($merged);
+}
+
+function sss_sanitize_product_html($html)
+{
+    if ($html === '') {
+        return '';
+    }
+
+    $allowed = wp_kses_allowed_html('post');
+
+    $allowed['div']['style'] = true;
+    $allowed['div']['class'] = true;
+    $allowed['div']['id'] = true;
+
+    $allowed['video'] = array(
+        'class'    => true,
+        'id'       => true,
+        'width'    => true,
+        'height'   => true,
+        'preload'  => true,
+        'controls' => true,
+        'poster'   => true,
+        'style'    => true,
+        'src'      => true,
+    );
+
+    $allowed['source'] = array(
+        'src'  => true,
+        'type' => true,
+    );
+
+    $allowed['a']['href'] = true;
+
+    return wp_kses($html, $allowed);
+}
+
+function sss_normalize_video_html($html)
+{
+    if ($html === '') {
+        return '';
+    }
+
+    // If <video> has no src or <source>, but contains an <a href="...mp4">, set src on <video>.
+    $pattern = '/<video\\b(?![^>]*\\bsrc=)([^>]*)>(.*?)<\\/video>/is';
+    $html = preg_replace_callback($pattern, function ($m) {
+        $attrs = $m[1];
+        $inner = $m[2];
+
+        if (stripos($inner, '<source') !== false) {
+            return $m[0];
+        }
+
+        if (preg_match("~<a\\b[^>]*href=([\"'])([^\"']+)\\1[^>]*>.*?</a>~is", $inner, $am)) {
+            $href = $am[2];
+            // Only rewrite common video links
+            if (preg_match('/\\.(mp4|webm|ogg)(\\?.*)?$/i', $href)) {
+                return '<video' . $attrs . ' src="' . esc_url($href) . '"></video>';
+            }
+        }
+
+        return $m[0];
+    }, $html);
+
+    return $html;
+}
+
+function sss_ensure_attribute_taxonomy($taxonomy, $label = '')
+{
+    if ($taxonomy === '' || taxonomy_exists($taxonomy)) {
+        return true;
+    }
+
+    if (strpos($taxonomy, 'pa_') !== 0) {
+        return false;
+    }
+
+    if (! function_exists('wc_create_attribute')) {
+        return false;
+    }
+
+    $slug = substr($taxonomy, 3);
+    $slug = wc_sanitize_taxonomy_name($slug);
+    $label = $label !== '' ? $label : ucwords(str_replace('-', ' ', $slug));
+
+    $existing_id = wc_attribute_taxonomy_id_by_name($slug);
+    if (! $existing_id) {
+        $created = wc_create_attribute([
+            'name'         => $label,
+            'slug'         => $slug,
+            'type'         => 'select',
+            'order_by'     => 'menu_order',
+            'has_archives' => false,
+        ]);
+
+        if (is_wp_error($created) || ! $created) {
+            return false;
+        }
+    }
+
+    // Register for this request so taxonomy_exists() will pass.
+    register_taxonomy(
+        'pa_' . $slug,
+        ['product'],
+        [
+            'hierarchical'          => false,
+            'show_ui'               => true,
+            'query_var'             => true,
+            'rewrite'               => false,
+            'show_admin_column'     => false,
+            'show_in_nav_menus'     => false,
+            'public'                => false,
+            'show_in_quick_edit'    => false,
+        ]
+    );
+
+    return true;
 }
 
 function save_brands($external_brand_name, $external_brand_id, $product_id)
