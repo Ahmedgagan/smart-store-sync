@@ -55,7 +55,7 @@ class MSI_Settings
         switch ($_POST['store_import_action']) {
 
             case 'save_woocommerce_credentials':
-                $purchase_token = isset($_POST['purchase_token']) ? sanitize_text_field(wp_unslash($_POST['purchase_token'])) : '';
+                $purchase_token = isset($_POST['purchase_token']) ? sanitize_text_field(wp_unslash($_POST['purchase_token'])) : $settings['purchase_token'];
                 $consumer_key = isset($_POST['consumer_key']) ? sanitize_text_field(wp_unslash($_POST['consumer_key'])) : '';
                 $consumer_secret = isset($_POST['consumer_secret']) ? sanitize_text_field(wp_unslash($_POST['consumer_secret'])) : '';
 
