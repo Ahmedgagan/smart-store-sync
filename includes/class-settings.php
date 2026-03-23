@@ -491,8 +491,7 @@ class MSI_Settings
                             class="regular-text"
                             value="<?php echo esc_attr($consumer_key); ?>"
                             placeholder="Woocommerce Consumer Key (32 Chars)"
-                            minlength="32"
-                            maxlength="32" />
+                            minlength="32" />
                         <p class="description">
                             Enter your WooCommerce Consumer Key.
                         </p>
@@ -507,8 +506,7 @@ class MSI_Settings
                             class="regular-text"
                             value="<?php echo esc_attr($consumer_secret); ?>"
                             placeholder="Woocommerce Consumer Secret (42-44 Chars)"
-                            minlength="42"
-                            maxlength="44" />
+                            minlength="42" />
                         <p class="description">
                             Enter your WooCommerce Consumer Secret.
                         </p>

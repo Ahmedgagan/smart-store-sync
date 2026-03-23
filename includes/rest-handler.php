@@ -54,6 +54,12 @@ add_action('init', function () {
 function sss_handle_request(WP_REST_Request $request)
 {
 
+    @ini_set('max_execution_time', 300);
+    @ini_set('memory_limit', '512M');
+    ignore_user_abort(true);
+    set_time_limit(0);
+    wp_suspend_cache_invalidation(true);
+
     if (! function_exists('WP_Filesystem')) {
         require_once ABSPATH . 'wp-admin/includes/file.php';
     }
@@ -797,6 +803,9 @@ function sss_handle_request(WP_REST_Request $request)
     fclose($handle);
 
     $error_truncated = (count($errors) >= $max_errors);
+
+    wp_suspend_cache_invalidation(false);
+    wc_delete_product_transients();
 
     return new WP_REST_Response(
         array(
