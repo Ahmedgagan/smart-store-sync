@@ -78,8 +78,11 @@ class MSI_Settings
             case 'save_settings':
                 $purchase_token = isset($_POST['purchase_token']) ? sanitize_text_field(wp_unslash($_POST['purchase_token'])) : '';
                 $default_profit_margin = isset($_POST['default_profit_margin']) ? sanitize_text_field(wp_unslash($_POST['default_profit_margin'])) : '';
+                $min_price_filter = isset($_POST['min_price_filter']) ? sanitize_text_field(wp_unslash($_POST['min_price_filter'])) : '';
+                $max_price_filter = isset($_POST['max_price_filter']) ? sanitize_text_field(wp_unslash($_POST['max_price_filter'])) : '';
+                $skip_unmapped_cat = isset($_POST['skip_unmapped_cat']) ? sanitize_text_field(wp_unslash($_POST['skip_unmapped_cat'])) : '';
 
-                if ($this->save_settings($settings, $purchase_token, $default_profit_margin)) {
+                if ($this->save_settings($settings, $purchase_token, $default_profit_margin, $min_price_filter, $max_price_filter, $skip_unmapped_cat)) {
                     if ($settings['default_profit_margin'] != $default_profit_margin) {
                         fix_profit_margin_and_categories();
                     }
@@ -469,6 +472,29 @@ class MSI_Settings
                         </p>
                     </td>
                 </tr>
+
+                <tr>
+                    <th scope="row">Import Filters</th>
+                    <td>
+                        <fieldset>
+                            <label>
+                                Min Price: <input type="number" name="min_price_filter" value="<?php echo esc_attr($settings['min_price_filter'] ?? 0); ?>" step="1" class="small-text">
+                            </label>
+                            <br><br>
+                            <label>
+                                Max Price: <input type="number" name="max_price_filter" value="<?php echo esc_attr($settings['max_price_filter'] ?? 0); ?>" step="1" class="small-text">
+                            </label>
+                            <p class="description">Products outside this range (before profit margin) will be skipped. Set to 0 to disable.</p>
+                        </fieldset>
+                        <hr>
+                        <fieldset>
+                            <label>
+                                <input type="checkbox" name="skip_unmapped_cat" value="yes" <?php checked($settings['skip_unmapped_cat'] ?? 'no', 'yes'); ?>>
+                                Skip products if category is not mapped
+                            </label>
+                        </fieldset>
+                    </td>
+                </tr>
             </table>
 
             <p class="submit">
@@ -577,7 +603,10 @@ class MSI_Settings
             'consumer_key'      => '',
             'consumer_secret'   => '',
             'purchase_token'    => '',
-            'default_profit_margin' => '',
+            'default_profit_margin' => 0,
+            'min_price_filter' => 0,
+            'max_price_filter' => 0,
+            'skip_unmapped_cat' => 'yes',
             'category_mappings' => [],
             'fallbacks'         => [],
             'last_sync'         => [],
@@ -597,10 +626,13 @@ class MSI_Settings
         update_option(self::OPTION_KEY, $settings);
     }
 
-    private function save_settings($settings, $purchase_token, $default_profit_margin)
+    private function save_settings($settings, $purchase_token, $default_profit_margin, $min_price_filter, $max_price_filter, $skip_unmapped_cat)
     {
         $settings['purchase_token'] = $purchase_token;
         $settings['default_profit_margin'] = $default_profit_margin;
+        $settings['min_price_filter'] = $min_price_filter;
+        $settings['max_price_filter'] = $max_price_filter;
+        $settings['skip_unmapped_cat'] = $skip_unmapped_cat;
 
         $this->update_settings($settings);
         return true;

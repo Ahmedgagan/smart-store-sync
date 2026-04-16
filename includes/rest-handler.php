@@ -24,11 +24,9 @@ add_action('rest_api_init', function () {
 });
 
 add_action('init', function () {
-
     if (taxonomy_exists('product_brand')) {
         return;
     }
-
     register_taxonomy(
         'product_brand',
         'product',
@@ -44,35 +42,16 @@ add_action('init', function () {
     );
 });
 
-
 /**
- * Main handler
- *
- * Note: this function relies on helpers in includes/helpers.php
- * and image helper sss_set_product_image_from_url() from includes/image-handler.php
+ * REST API Handler: Saves file and initiates background processing
  */
 function sss_handle_request(WP_REST_Request $request)
 {
-
-    @ini_set('max_execution_time', 300);
-    @ini_set('memory_limit', '512M');
-    ignore_user_abort(true);
-    set_time_limit(0);
-    wp_suspend_cache_invalidation(true);
-
-    if (! function_exists('WP_Filesystem')) {
-        require_once ABSPATH . 'wp-admin/includes/file.php';
-    }
-
-    WP_Filesystem();
-
-    global $wp_filesystem;
-
     if ($request->get_method() === 'GET') {
         return new WP_REST_Response(
             array(
                 'ok'      => true,
-                'message' => 'Product CSV endpoint is working. Send POST with a CSV file (field name: file).',
+                'message' => 'Product CSV endpoint is working. Send POST with a CSV file.',
             ),
             200
         );
@@ -84,80 +63,101 @@ function sss_handle_request(WP_REST_Request $request)
 
     $files = $request->get_file_params();
     if (empty($files['file']) || ! isset($files['file']['tmp_name'])) {
-        return new WP_Error('sss_no_file', 'No CSV file uploaded. Please send it as "file" (multipart/form-data).', array('status' => 400));
+        return new WP_Error('sss_no_file', 'No CSV file uploaded.', array('status' => 400));
     }
 
-    // if (! file_exists($csv_path)) {
-    //     return new WP_Error('sss_file_missing', 'Uploaded file not found on server.', array('status' => 500));
-    // }
+    $upload_dir = wp_upload_dir();
+    $sync_dir   = $upload_dir['basedir'] . '/product-sync-temp/';
 
-    if (! $wp_filesystem || ! is_object($wp_filesystem)) {
-        return new WP_Error(
-            'filesystem_unavailable',
-            'WordPress filesystem could not be initialized.'
-        );
+    if (! file_exists($sync_dir)) {
+        wp_mkdir_p($sync_dir);
     }
 
-    $csv_path = $files['file']['tmp_name'];
+    $filename  = 'sync_' . uniqid() . '.csv';
+    $full_path = $sync_dir . $filename;
 
-    if (! $wp_filesystem->exists($csv_path)) {
-        return new WP_Error(
-            'csv_missing',
-            'Uploaded CSV file not found.',
-            ['status' => 400]
-        );
+    if (! move_uploaded_file($files['file']['tmp_name'], $full_path)) {
+        return new WP_Error('sss_upload_fail', 'Could not save CSV file locally.', array('status' => 500));
     }
 
-    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
+    as_enqueue_async_action('sss_process_csv_batch', array(
+        'file_path' => $full_path,
+        'row_index' => 0,
+        'stats'     => array(
+            'created'         => 0,
+            'stock_updated'   => 0,
+            'stock_unchanged' => 0,
+            'errors'          => array()
+        )
+    ), 'product_sync_group');
+
+    return new WP_REST_Response(
+        array(
+            'ok'      => true,
+            'message' => 'File received. Background processing started in batches of 100.',
+            'job_id'  => $filename
+        ),
+        202
+    );
+}
+
+/**
+ * Background Worker Hooked to Action Scheduler
+ */
+add_action('sss_process_csv_batch', 'sss_run_product_batch', 10, 3);
+function sss_run_product_batch($csv_path, $start_row, $stats)
+{
+    if (! file_exists($csv_path)) return;
+
+    @ini_set('max_execution_time', 300);
+    @ini_set('memory_limit', '512M');
+    wp_suspend_cache_invalidation(true);
+
+    if (! function_exists('WP_Filesystem')) {
+        require_once ABSPATH . 'wp-admin/includes/file.php';
+    }
+    WP_Filesystem();
+
     $handle = fopen($csv_path, 'r');
+    $header = fgetcsv($handle, 0, ',');
 
-    if (! $handle) {
-        return new WP_Error('sss_cannot_open', 'Cannot open uploaded CSV file.', array('status' => 500));
+    $batch_size      = 100;
+    $current_row     = 0;
+    $processed_count = 0;
+
+    while ($current_row < $start_row && ($data = fgetcsv($handle, 0, ',')) !== false) {
+        $current_row++;
     }
 
-    // Build external map
     $external_map = sss_build_external_map();
+    $stored       = get_option('store_import_settings', []);
+    $max_errors   = 2000;
 
-    $stored = get_option('store_import_settings', []);
-    $row_number      = 0;
-    $created_count   = 0;
-    $stock_updated   = 0;
-    $stock_unchanged = 0;
-    $errors          = array();
-    $header          = array();
-    $max_errors      = 200;
+    while ($processed_count < $batch_size && ($data = fgetcsv($handle, 0, ',')) !== false) {
+        $current_row++;
+        $processed_count++;
 
-    while (($data = fgetcsv($handle, 0, ',')) !== false) {
-        $row_number++;
-
-        // header
-        if ($row_number === 1) {
-            $header = $data;
-            continue;
-        }
-
-        // map row
         $row = array();
         foreach ($header as $index => $column_name) {
             $key = strtolower(trim($column_name, " \t\n\r\0\x0B\""));
             $row[$key] = isset($data[$index]) ? trim($data[$index]) : '';
         }
 
-        // expected CSV columns
         $external_product_id = $row['product_id'] ?? '';
         $product_name        = $row['product_name'] ?? '';
         $image_url           = $row['image_url'] ?? '';
         $image_gallery_raw   = $row['product_images'] ?? '';
         $current_price       = $row['current_price'] ?? '';
-        $original_price       = $row['original_price'] ?? '';
+        $original_price      = $row['original_price'] ?? '';
         $stock_status_raw    = $row['stock_status'] ?? '';
         $is_active_raw       = $row['is_active'] ?? '';
         $has_variants_raw    = $row['has_variants'] ?? '';
         $variants_raw        = $row['variants'] ?? '';
-        $external_store_id = $row['store_id'];
+        $external_store_id   = $row['store_id'];
         $external_store_name = $row['store_name'];
         $external_product_url = $row['product_url'];
-        $categories_raw = $row['categories'] ?? '';
+        $categories_raw      = $row['categories'] ?? '';
+
         $external_category_ids = [];
         if ($categories_raw !== '') {
             $tokens = array_filter(array_map('trim', explode(',', $categories_raw)), function ($t) {
@@ -170,19 +170,37 @@ function sss_handle_request(WP_REST_Request $request)
 
         $external_category_id = $external_category_ids[0] ?? '';
         $default_profit_margin = $stored["default_profit_margin"] ?? 1000;
+        $min_price_filter = $stored["min_price_filter"] ?? 0;
+        $max_price_filter = $stored["max_price_filter"] ?? 0;
+        $skip_unmapped_cat = $stored["skip_unmapped_cat"] ?? 'yes';
         $profit_margin = $default_profit_margin;
         $woo_category_ids = [];
         foreach ($external_category_ids as $cat_id) {
             $mapped_wp_cat = $stored['category_mappings'][$external_store_id][$cat_id]['wp_category'] ?? 0;
-            if ($mapped_wp_cat) {
-                $woo_category_ids[] = (int) $mapped_wp_cat;
-            }
+            if ($mapped_wp_cat) $woo_category_ids[] = (int) $mapped_wp_cat;
             $cat_margin = $stored['category_mappings'][$external_store_id][$cat_id]['profit_margin'] ?? $default_profit_margin;
-            if ($cat_margin > $profit_margin) {
-                $profit_margin = $cat_margin;
-            }
+            if ($cat_margin > $profit_margin) $profit_margin = $cat_margin;
         }
+
         $woo_category_ids = array_values(array_unique(array_filter($woo_category_ids)));
+
+        if ($skip_unmapped_cat === 'yes' && empty($woo_category_ids)) {
+            $stats['skip'][] = array('row' => $current_row, 'reason' => 'Category Mapping Not Found.');
+            continue;
+        }
+
+        if (($min_price_filter > 0 && $current_price < $min_price_filter) || ($max_price_filter > 0 && $current_price > $max_price_filter)) {
+            if ($current_price < $min_price_filter) {
+                $stats['skip'][] = array('row' => $current_row, 'reason' => 'Current price is less than minimum price filter.');
+            }
+
+            if ($current_price > $max_price_filter) {
+                $stats['skip'][] = array('row' => $current_row, 'reason' => 'Current price is greater than maximum price filter.');
+            }
+
+            continue; // Skip product
+        }
+
         $external_category_ids_csv = implode(',', $external_category_ids);
         $external_brand_id   = $row['brand_id'] ?? '';
         $external_brand_name = $row['brand_name'] ?? '';
@@ -193,21 +211,14 @@ function sss_handle_request(WP_REST_Request $request)
         $attributes_raw      = $row['attributes'] ?? '';
         $price_with_profit = $current_price;
 
-        if ($profit_margin) {
-            $price_with_profit += $profit_margin;
-        }
+        if ($profit_margin) $price_with_profit += $profit_margin;
+        if ($original_price < $price_with_profit) $original_price = $price_with_profit;
 
-        if ($original_price < $price_with_profit) {
-            $original_price = $price_with_profit;
-        }
-
-        $gallery_urls = array_filter(
-            array_map('trim', explode(',', $image_gallery_raw))
-        );
+        $gallery_urls = array_filter(array_map('trim', explode(',', $image_gallery_raw)));
 
         if ($external_product_id === '') {
-            if (count($errors) < $max_errors) {
-                $errors[] = array('row' => $row_number, 'error' => 'Missing product_id.');
+            if (count($stats['errors']) < $max_errors) {
+                $stats['errors'][] = array('row' => $current_row, 'error' => 'Missing product_id.');
             }
             continue;
         }
@@ -221,26 +232,26 @@ function sss_handle_request(WP_REST_Request $request)
             $product = wc_get_product($external_map[$external_product_id]);
         }
 
-        // Keep a parent attachment id variable so we can reuse
         $parent_image_id = 0;
         if ($product) {
             $parent_image_id = (int) get_post_thumbnail_id($product->get_id());
-            // if _external_image_src is present we may still have parent_image_id empty; try to find thumbnail by meta
-            if (! $parent_image_id) {
-                $external_src = get_post_meta($product->get_id(), '_external_image_src', true);
-                if ($external_src) {
-                    // try to find attachment by file name or url (expensive) — skip for now
-                }
+            $p_id = $product->get_id();
+            $current_type = $product->get_type();
+
+            // Simple to Variable
+            if ($has_variants && $current_type === 'simple') {
+                $product_id = sss_convert_product_type($p_id, 'variable');
+                $product = wc_get_product($p_id);
+            }
+            // Variable to Simple
+            elseif (!$has_variants && $current_type === 'variable') {
+                $product_id = sss_convert_product_type($p_id, 'simple');
+                $product = wc_get_product($p_id);
             }
         }
 
-        // VARIANTS HANDLING: supports JSON array (detailed) OR simple name/value list
         if ($has_variants) {
-
-            // Try JSON first
             $variants = json_decode($variants_raw, true);
-
-            // If JSON array is a simple name/value list, normalize into variants
             if (is_array($variants) && ! empty($variants)) {
                 $looks_like_name_value = true;
                 foreach ($variants as $v) {
@@ -249,23 +260,19 @@ function sss_handle_request(WP_REST_Request $request)
                         break;
                     }
                 }
-
                 if ($looks_like_name_value) {
                     $normalized = array();
                     foreach ($variants as $v) {
                         $attr_name = strtolower(trim((string) $v['name']));
                         $attr_value = (string) $v['value'];
-                        if ($attr_name === '' || $attr_value === '') {
-                            continue;
-                        }
-
+                        if ($attr_name === '' || $attr_value === '') continue;
                         $normalized[] = array(
-                            'sku' => '', // will be generated below if empty
+                            'sku' => '',
                             'sale_price' => $price_with_profit ?: '',
                             'orignal_price' => $original_price ?: '',
                             'stock_status' => $stock_status_raw ?: '',
                             'stock_quantity' => (strtolower(trim($stock_status_raw)) === 'in_stock') ? 1000 : 0,
-                            'image_url' => '', // leave empty so variation uses parent image
+                            'image_url' => '',
                             'attributes' => array($attr_name => $attr_value),
                         );
                     }
@@ -274,60 +281,36 @@ function sss_handle_request(WP_REST_Request $request)
             }
 
             if (! is_array($variants) || empty($variants)) {
-                if (count($errors) < $max_errors) {
-                    $errors[] = array('row' => $row_number, 'product_id' => $external_product_id, 'error' => 'Invalid or empty variants JSON.');
+                if (count($stats['errors']) < $max_errors) {
+                    $stats['errors'][] = array('row' => $current_row, 'product_id' => $external_product_id, 'error' => 'Invalid variants JSON.');
                 }
                 continue;
             }
 
-            // gather attribute values from variants (we'll use local attributes on parent)
             $attribute_values = array();
             foreach ($variants as $v) {
                 if (isset($v['attributes']) && is_array($v['attributes'])) {
                     foreach ($v['attributes'] as $attr_name => $attr_value) {
                         $attr_name_l = strtolower(trim($attr_name));
                         $attr_value_s = (string) $attr_value;
-                        if ($attr_value_s === '') {
-                            continue;
-                        }
-                        if (! isset($attribute_values[$attr_name_l])) {
-                            $attribute_values[$attr_name_l] = array();
-                        }
-                        if (! in_array($attr_value_s, $attribute_values[$attr_name_l], true)) {
-                            $attribute_values[$attr_name_l][] = $attr_value_s;
-                        }
+                        if ($attr_value_s === '') continue;
+                        if (! isset($attribute_values[$attr_name_l])) $attribute_values[$attr_name_l] = array();
+                        if (! in_array($attr_value_s, $attribute_values[$attr_name_l], true)) $attribute_values[$attr_name_l][] = $attr_value_s;
                     }
                 }
             }
 
-            // create variable parent if missing
             if (! $product) {
                 $parent = new WC_Product_Variable();
                 $parent->set_name($product_name ?: 'Variant product ' . $external_product_id);
-                if ($short_description !== '') {
-                    $parent->set_short_description($short_description);
-                }
-                if ($description !== '') {
-                    $parent->set_description($description);
-                }
-                if ($new_post_status) {
-                    $parent->set_status($new_post_status);
-                }
-
-                if (is_array($woo_category_ids)) {
-                    $parent->set_category_ids($woo_category_ids);
-                }
-                // disable parent stock management (variations manage stock)
+                if ($short_description !== '') $parent->set_short_description($short_description);
+                if ($description !== '') $parent->set_description($description);
+                if ($new_post_status) $parent->set_status($new_post_status);
+                if (is_array($woo_category_ids)) $parent->set_category_ids($woo_category_ids);
                 $parent->set_manage_stock(false);
                 $parent_id = $parent->save();
                 save_brands($external_brand_name, $external_brand_id, $parent_id);
-
-                if (is_wp_error($parent_id)) {
-                    if (count($errors) < $max_errors) {
-                        $errors[] = array('row' => $row_number, 'product_id' => $external_product_id, 'error' => 'Cannot create variable product: ' . $parent_id->get_error_message());
-                    }
-                    continue;
-                }
+                if (is_wp_error($parent_id)) continue;
                 $parent->update_meta_data('_external_product_id', $external_product_id);
                 $parent->update_meta_data('_external_store_name', $external_store_name);
                 $parent->update_meta_data('_external_product_url', $external_product_url);
@@ -338,41 +321,24 @@ function sss_handle_request(WP_REST_Request $request)
                 $parent->update_meta_data('_external_store_id', $external_store_id);
                 $parent->save();
                 $product = wc_get_product($parent_id);
-                $external_map[$external_product_id] = $parent_id;
-                $created_count++;
-
-                // attach parent image here once (if provided)
+                $stats['created']++;
                 if ($image_url !== '') {
                     $parent_image_id = sss_set_product_image_from_url($parent_id, $image_url);
                     if ($parent_image_id) {
-                        // set thumbnail for parent
                         $product->set_image_id($parent_image_id);
                         $product->update_meta_data('_external_image_src', $image_url);
                         $product->save();
                     }
                 }
-
                 set_gallery_images($parent_id, $gallery_urls, $image_url);
             } else {
-                // Ensure product is variable
                 if ($product->get_type() !== 'variable') {
-                    // convert/create new variable product and update map
                     $parent = new WC_Product_Variable();
                     $parent->set_name($product_name ?: $product->get_name());
-                    if ($short_description !== '') {
-                        $parent->set_short_description($short_description);
-                    }
-                    if ($description !== '') {
-                        $parent->set_description($description);
-                    }
-
-                    if ($new_post_status) {
-                        $parent->set_status($new_post_status);
-                    }
-                    if (is_array($woo_category_ids)) {
-                        $parent->set_category_ids($woo_category_ids);
-                    }
-
+                    if ($short_description !== '') $parent->set_short_description($short_description);
+                    if ($description !== '') $parent->set_description($description);
+                    if ($new_post_status) $parent->set_status($new_post_status);
+                    if (is_array($woo_category_ids)) $parent->set_category_ids($woo_category_ids);
                     $parent_id = $parent->save();
                     $parent->update_meta_data('_external_product_id', $external_product_id);
                     $parent->update_meta_data('_external_store_name', $external_store_name);
@@ -385,9 +351,6 @@ function sss_handle_request(WP_REST_Request $request)
                     $parent->save();
                     save_brands($external_brand_name, $external_brand_id, $parent_id);
                     $product = wc_get_product($parent_id);
-                    $external_map[$external_product_id] = $parent_id;
-
-                    // attach parent image if provided
                     if ($image_url !== '') {
                         $parent_image_id = sss_set_product_image_from_url($parent_id, $image_url);
                         if ($parent_image_id) {
@@ -396,10 +359,8 @@ function sss_handle_request(WP_REST_Request $request)
                             $product->save();
                         }
                     }
-
                     set_gallery_images($parent_id, $gallery_urls, $image_url);
                 } else {
-                    // product exists and is variable — ensure parent has image if not and CSV provides one
                     $product->update_meta_data('_external_current_price', $current_price);
                     $product->update_meta_data('_external_orignal_price', $original_price);
                     $product->update_meta_data('_external_category_id', $external_category_id);
@@ -407,17 +368,10 @@ function sss_handle_request(WP_REST_Request $request)
                     $product->update_meta_data('_external_store_id', $external_store_id);
                     if (is_array($woo_category_ids) && $woo_category_ids !== $product->get_category_ids()) {
                         $product->set_category_ids($woo_category_ids);
-                        $product->save();
                     }
-                    if ($short_description !== '') {
-                        $product->set_short_description($short_description);
-                        $product->save();
-                    }
-                    if ($description !== '') {
-                        $product->set_description($description);
-                        $product->save();
-                    }
-
+                    if ($short_description !== '') $product->set_short_description($short_description);
+                    if ($description !== '') $product->set_description($description);
+                    $product->save();
                     $parent_id = $product->get_id();
                     if ($image_url !== '') {
                         $parent_image_id = sss_set_product_image_from_url($parent_id, $image_url);
@@ -427,25 +381,16 @@ function sss_handle_request(WP_REST_Request $request)
                             $product->save();
                         }
                     }
-
                     set_gallery_images($parent_id, $gallery_urls, $image_url);
                     save_brands($external_brand_name, $external_brand_id, $parent_id);
+                    $stats['stock_unchanged']++;
                 }
             }
 
-            if (! $product || $product->get_type() !== 'variable') {
-                if (count($errors) < $max_errors) {
-                    $errors[] = array('row' => $row_number, 'product_id' => $external_product_id, 'error' => 'Parent product not available as variable.');
-                }
-                continue;
-            }
-
-            // set local attributes on parent
             $parent_attributes = array();
             foreach ($attribute_values as $attr_name => $values) {
                 $attr = new WC_Product_Attribute();
                 $attr->set_id(0);
-                // keep visible name (human), WC will map variation meta by slug 'attribute_{slug}'
                 $attr->set_name($attr_name);
                 $attr->set_options(array_values($values));
                 $attr->set_position(0);
@@ -455,56 +400,34 @@ function sss_handle_request(WP_REST_Request $request)
             }
 
             try {
-                $extra_attributes = sss_build_non_variant_attributes_for_product(
-                    $parent_id,
-                    $attributes_raw,
-                    $errors,
-                    $row_number,
-                    $external_product_id
-                );
+                $extra_attributes = sss_build_non_variant_attributes_for_product($parent_id, $attributes_raw, $stats['errors'], $current_row, $external_product_id);
                 $parent_attributes = sss_merge_product_attributes($parent_attributes, $extra_attributes);
-
                 if (! empty($parent_attributes)) {
                     $product->set_attributes($parent_attributes);
                     $product->save();
                 }
             } catch (Exception $e) {
-                if (count($errors) < $max_errors) {
-                    $errors[] = array('row' => $row_number, 'product_id' => $external_product_id, 'error' => 'Cannot set attributes on parent: ' . $e->getMessage());
-                }
             }
 
-            // create/update each variant
             $parent_id = $product->get_id();
-            $existing_variation_ids = $product->get_children(); // variation post IDs
+            $existing_variation_ids = $product->get_children();
 
             foreach ($variants as $v) {
-                if (empty($v['attributes']) || ! is_array($v['attributes'])) {
-                    if (count($errors) < $max_errors) {
-                        $errors[] = array('row' => $row_number, 'product_id' => $external_product_id, 'error' => 'Variant missing attributes object.');
-                    }
-                    continue;
-                }
-
-                // normalize variant attributes (lower-case keys)
+                if (empty($v['attributes']) || ! is_array($v['attributes'])) continue;
                 $variation_attributes = array();
                 foreach ($v['attributes'] as $k_attr => $v_attr) {
                     $variation_attributes[strtolower(trim($k_attr))] = (string) $v_attr;
                 }
 
-                // Try to find matching existing variation by attributes (compare attribute_{slug} meta)
                 $found_variant = null;
                 if (! empty($existing_variation_ids)) {
                     foreach ($existing_variation_ids as $var_id) {
                         $var = wc_get_product($var_id);
-                        if (! $var || $var->get_type() !== 'variation') {
-                            continue;
-                        }
+                        if (! $var) continue;
                         $match = true;
                         foreach ($variation_attributes as $k_attr => $k_val) {
                             $meta_key = 'attribute_' . sanitize_title($k_attr);
-                            $existing_meta = get_post_meta($var_id, $meta_key, true);
-                            if ((string) $existing_meta !== (string) $k_val) {
+                            if ((string) get_post_meta($var_id, $meta_key, true) !== (string) $k_val) {
                                 $match = false;
                                 break;
                             }
@@ -516,7 +439,6 @@ function sss_handle_request(WP_REST_Request $request)
                     }
                 }
 
-                // prepare variant values with sensible fallbacks
                 $var_sku = isset($v['sku']) ? trim($v['sku']) : '';
                 $var_price = isset($v['sale_price']) ? trim($v['sale_price']) : ($price_with_profit ?: '');
                 $var_orignal_price = isset($v['orignal_price']) ? trim($v['orignal_price']) : ($original_price ?: '');
@@ -525,18 +447,8 @@ function sss_handle_request(WP_REST_Request $request)
                 $var_image_url = isset($v['image_url']) ? trim($v['image_url']) : '';
 
                 if (! $var_sku) {
-                    // generate SKU: external_product_id + sanitized attribute snippet
                     $snippet = sanitize_title(implode('-', array_values($variation_attributes)));
                     $var_sku = substr($external_product_id . '-' . ($snippet ?: 'v'), 0, 60);
-                }
-
-                // --- Robust variation creation/update & meta setup ---
-
-                // Build meta-style keys we will persist: 'attribute_{slug}' => value
-                $variation_meta_attrs = array();
-                foreach ($variation_attributes as $attr_k => $attr_v) {
-                    $meta_key = 'attribute_' . sanitize_title($attr_k);
-                    $variation_meta_attrs[$meta_key] = $attr_v;
                 }
 
                 if ($found_variant) {
@@ -546,129 +458,51 @@ function sss_handle_request(WP_REST_Request $request)
                     $variation->set_parent_id($parent_id);
                 }
 
-                // Set readable attributes for CRUD layer (keys are raw names like 'size' => 'M')
                 $variation->set_attributes($variation_attributes);
-
-                // Set sku/price/stock on the object
                 $variation->set_sku($var_sku);
-                if ($var_price !== '') {
-                    $variation->set_sale_price($var_price);
-                }
-
-                if ($var_orignal_price !== '') {
-                    $variation->set_regular_price($var_orignal_price);
-                }
-
-                // Ensure variation manages stock and values set on object
+                if ($var_price !== '') $variation->set_sale_price($var_price);
+                if ($var_orignal_price !== '') $variation->set_regular_price($var_orignal_price);
                 $variation->set_manage_stock(true);
                 $variation->set_stock_status($var_stock_status);
                 $variation->set_stock_quantity($var_stock_qty);
 
-                // Save variation once to obtain an ID (if new). We will update the meta keys after.
-                try {
-                    $variation_id = $variation->save();
-                } catch (Exception $e) {
-                    if (count($errors) < $max_errors) {
-                        $errors[] = array('row' => $row_number, 'product_id' => $external_product_id, 'error' => 'Cannot save variation (initial save): ' . $e->getMessage());
-                    }
-                    continue;
+                $variation_id = $variation->save();
+                foreach ($variation_attributes as $attr_k => $attr_v) {
+                    update_post_meta($variation_id, 'attribute_' . sanitize_title($attr_k), (string) $attr_v);
                 }
 
-                // Persist attribute_{slug} meta keys so WC recognizes variations properly
-                foreach ($variation_meta_attrs as $meta_key => $meta_val) {
-                    update_post_meta($variation_id, $meta_key, (string) $meta_val);
-                }
-
-                // Ensure stock meta matches what we set via CRUD (helps some WC versions)
-                update_post_meta($variation_id, '_stock', (int) $var_stock_qty);
-                update_post_meta($variation_id, '_stock_status', $var_stock_status);
-
-                // Attach per-variant image (if provided) OR reuse parent image when variant image not provided
                 if ($var_image_url !== '') {
-                    $prev_src = get_post_meta($variation_id, '_external_image_src', true);
-                    if ($prev_src !== $var_image_url) {
-                        $att_id = sss_set_product_image_from_url($parent_id, $var_image_url);
-                        if ($att_id) {
-                            update_post_meta($variation_id, '_thumbnail_id', $att_id);
-                            update_post_meta($variation_id, '_external_image_src', $var_image_url);
-                        }
-                    }
-                } else {
-                    // No variant image provided — use parent image if available
-                    if ($parent_image_id) {
-                        update_post_meta($variation_id, '_thumbnail_id', (int) $parent_image_id);
-                        // set external image src on variation so future imports know it's using parent's image
-                        update_post_meta($variation_id, '_external_image_src', get_post_meta($parent_id, '_external_image_src', true));
-                    }
+                    $att_id = sss_set_product_image_from_url($parent_id, $var_image_url);
+                    if ($att_id) update_post_meta($variation_id, '_thumbnail_id', $att_id);
+                } elseif ($parent_image_id) {
+                    update_post_meta($variation_id, '_thumbnail_id', (int) $parent_image_id);
                 }
-
-                // Finalize: reload & save to let Woo update caches
-                try {
-                    wc_delete_product_transients($parent_id); // clear parent caches
-                    $variation = wc_get_product($variation_id);
-                    if ($variation) {
-                        $variation->save();
-                    }
-                } catch (Exception $e) {
-                    if (count($errors) < $max_errors) {
-                        $errors[] = array('row' => $row_number, 'product_id' => $external_product_id, 'error' => 'Cannot finalize variation save: ' . $e->getMessage());
-                    }
-                    continue;
-                }
-
-                // end variant loop
+                $variation->save();
             }
-
-            // done with this variable-row
             continue;
-        } // end has_variants branch
+        }
 
-        // ---------- SIMPLE PRODUCT FLOW (unchanged) ----------
         if (! $product) {
-            if ($product_name === '') {
-                if (count($errors) < $max_errors) {
-                    $errors[] = array('row' => $row_number, 'product_id' => $external_product_id, 'error' => 'Product not found and product_name is empty, cannot create.');
-                }
-                continue;
-            }
-
+            if ($product_name === '') continue;
             try {
                 $product = new WC_Product_Simple();
                 $product->set_name($product_name);
-                if ($short_description !== '') {
-                    $product->set_short_description($short_description);
-                }
-                if ($description !== '') {
-                    $product->set_description($description);
-                }
+                if ($short_description !== '') $product->set_short_description($short_description);
+                if ($description !== '') $product->set_description($description);
                 if ($current_price !== '') {
                     $product->set_sale_price($price_with_profit);
                     $product->set_regular_price($original_price);
                 }
-                if (is_array($woo_category_ids)) {
-                    $product->set_category_ids($woo_category_ids);
-                }
-                if ($new_post_status) {
-                    $product->set_status($new_post_status);
-                }
+                if (is_array($woo_category_ids)) $product->set_category_ids($woo_category_ids);
+                if ($new_post_status) $product->set_status($new_post_status);
                 $product->set_manage_stock(true);
-
                 $product->set_stock_status($new_wc_status);
                 $product->set_stock_quantity((strtolower(trim($new_wc_status)) === 'in_stock') ? 1000 : 0);
-
                 $product_id = $product->save();
                 save_brands($external_brand_name, $external_brand_id, $product_id);
-                if (is_wp_error($product_id)) {
-                    if (count($errors) < $max_errors) {
-                        $errors[] = array('row' => $row_number, 'product_id' => $external_product_id, 'error' => $product_id->get_error_message());
-                    }
-                    continue;
-                }
-
                 $product->update_meta_data('_external_product_id', $external_product_id);
                 $product->update_meta_data('_external_store_name', $external_store_name);
                 $product->update_meta_data('_external_product_url', $external_product_url);
-
                 if ($image_url !== '') {
                     $attachment_id = sss_set_product_image_from_url($product_id, $image_url);
                     if ($attachment_id) {
@@ -676,55 +510,40 @@ function sss_handle_request(WP_REST_Request $request)
                         $product->update_meta_data('_external_image_src', $image_url);
                     }
                 }
-
                 $product->update_meta_data('_external_current_price', $current_price);
                 $product->update_meta_data('_external_orignal_price', $original_price);
                 $product->update_meta_data('_external_category_id', $external_category_id);
                 $product->update_meta_data('_external_category_ids', $external_category_ids_csv);
                 $product->update_meta_data('_external_store_id', $external_store_id);
                 set_gallery_images($product_id, $gallery_urls, $image_url);
-                $extra_attributes = sss_build_non_variant_attributes_for_product(
-                    $product_id,
-                    $attributes_raw,
-                    $errors,
-                    $row_number,
-                    $external_product_id
-                );
+                $extra_attributes = sss_build_non_variant_attributes_for_product($product_id, $attributes_raw, $stats['errors'], $current_row, $external_product_id);
                 $merged = sss_merge_product_attributes($product->get_attributes(), $extra_attributes);
-                if (! empty($merged)) {
-                    $product->set_attributes($merged);
-                }
-
+                if (! empty($merged)) $product->set_attributes($merged);
                 $product->save();
-                $external_map[$external_product_id] = $product_id;
-                $created_count++;
+                $stats['created']++;
             } catch (Exception $e) {
-                if (count($errors) < $max_errors) {
-                    $errors[] = array('row' => $row_number, 'product_id' => $external_product_id, 'error' => $e->getMessage());
-                }
             }
         } else {
-            // update existing simple product
             try {
                 $needs_save = false;
-                $current_wc_status = $product->get_stock_status();
-                $current_post_stat = $product->get_status();
-
-                if ($new_wc_status !== $current_wc_status) {
+                if (!empty($product_name) && $product->get_name() !== $product_name) {
+                    $product->set_name($product_name);
+                    $needs_save = true;
+                }
+                if ($new_wc_status !== $product->get_stock_status()) {
                     $product->set_manage_stock(true);
                     $product->set_stock_status($new_wc_status);
                     $product->set_stock_quantity((strtolower(trim($new_wc_status)) === 'in_stock') ? 1000 : 0);
-                    $stock_updated++;
+                    $stats['stock_updated']++;
                     $needs_save = true;
                 } else {
-                    $stock_unchanged++;
+                    $stats['stock_unchanged']++;
                 }
 
-                if ($new_post_status && $new_post_status !== $current_post_stat) {
+                if ($new_post_status && $new_post_status !== $product->get_status()) {
                     $product->set_status($new_post_status);
                     $needs_save = true;
                 }
-
                 if ($short_description !== '' && $short_description !== $product->get_short_description()) {
                     $product->set_short_description($short_description);
                     $needs_save = true;
@@ -733,37 +552,28 @@ function sss_handle_request(WP_REST_Request $request)
                     $product->set_description($description);
                     $needs_save = true;
                 }
-
                 if ($original_price !== '' && $original_price != $product->get_regular_price()) {
                     $product->set_regular_price($original_price);
                     $needs_save = true;
                 }
-
                 if ($current_price !== '' && $current_price != $product->get_sale_price()) {
                     $product->set_sale_price($price_with_profit);
                     $needs_save = true;
                 }
-
                 if (is_array($woo_category_ids) && $woo_category_ids !== $product->get_category_ids()) {
                     $product->set_category_ids($woo_category_ids);
                     $needs_save = true;
                 }
 
                 $product_id = $product->get_id();
-
-                if ($image_url !== '') {
-                    $previous_src = $product->get_meta('_external_image_src', true);
-                    if ($previous_src !== $image_url) {
-                        $attachment_id = sss_set_product_image_from_url($product_id, $image_url);
-                        if ($attachment_id) {
-                            $product->set_image_id($attachment_id);
-                            $product->update_meta_data('_external_image_src', $image_url);
-                        }
+                if ($image_url !== '' && $product->get_meta('_external_image_src', true) !== $image_url) {
+                    $attachment_id = sss_set_product_image_from_url($product_id, $image_url);
+                    if ($attachment_id) {
+                        $product->set_image_id($attachment_id);
+                        $product->update_meta_data('_external_image_src', $image_url);
                     }
-
                     $needs_save = true;
                 }
-
                 $product->update_meta_data('_external_current_price', $current_price);
                 $product->update_meta_data('_external_orignal_price', $original_price);
                 $product->update_meta_data('_external_category_id', $external_category_id);
@@ -771,315 +581,184 @@ function sss_handle_request(WP_REST_Request $request)
                 $product->update_meta_data('_external_store_id', $external_store_id);
                 set_gallery_images($product_id, $gallery_urls, $image_url);
                 save_brands($external_brand_name, $external_brand_id, $product_id);
-
-                $extra_attributes = sss_build_non_variant_attributes_for_product(
-                    $product_id,
-                    $attributes_raw,
-                    $errors,
-                    $row_number,
-                    $external_product_id
-                );
+                $extra_attributes = sss_build_non_variant_attributes_for_product($product_id, $attributes_raw, $stats['errors'], $current_row, $external_product_id);
                 $merged = sss_merge_product_attributes($product->get_attributes(), $extra_attributes);
                 if (! empty($merged)) {
                     $product->set_attributes($merged);
                     $needs_save = true;
                 }
-
-                if ($needs_save) {
-                    $result = $product->save();
-                    if (is_wp_error($result) && count($errors) < $max_errors) {
-                        $errors[] = array('row' => $row_number, 'product_id' => $external_product_id, 'error' => $result->get_error_message());
-                    }
-                }
+                if ($needs_save) $product->save();
             } catch (Exception $e) {
-                if (count($errors) < $max_errors) {
-                    $errors[] = array('row' => $row_number, 'product_id' => $external_product_id, 'error' => $e->getMessage());
-                }
             }
         }
-    } // end while
+    }
 
-    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+    $has_more = ! feof($handle);
     fclose($handle);
 
-    $error_truncated = (count($errors) >= $max_errors);
+    if ($has_more) {
+        as_enqueue_async_action('sss_process_csv_batch', array(
+            'file_path' => $csv_path,
+            'row_index' => $current_row,
+            'stats'     => $stats
+        ), 'product_sync_group');
+    } else {
+        sss_dispatch_completion_data($stats);
+        unlink($csv_path);
+    }
 
     wp_suspend_cache_invalidation(false);
-    wc_delete_product_transients();
-
-    return new WP_REST_Response(
-        array(
-            'message'          => 'CSV processed.',
-            'created'          => $created_count,
-            'stock_updated'    => $stock_updated,
-            'stock_unchanged'  => $stock_unchanged,
-            'error_count'      => count($errors),
-            'errors_truncated' => $error_truncated,
-            'errors'           => $errors,
-        ),
-        200
-    );
 }
+
+/**
+ * Sends final data to external API
+ */
+function sss_dispatch_completion_data($stats)
+{
+    error_log(json_encode($stats));
+    $api_url = 'https://your-external-api.com/callback';
+    wp_remote_post($api_url, array(
+        'method'    => 'POST',
+        'headers'   => array('Content-Type' => 'application/json'),
+        'body'      => json_encode(array(
+            'status'    => 'completed',
+            'summary'   => $stats,
+            'timestamp' => current_time('mysql'),
+        )),
+        'timeout'   => 45,
+        'blocking'  => false,
+    ));
+}
+
+/**
+ * --- HELPER FUNCTIONS ---
+ */
 
 function sss_build_non_variant_attributes_for_product($product_id, $attributes_raw, &$errors, $row_number, $external_product_id)
 {
-    if (! $attributes_raw) {
-        return [];
-    }
-
+    if (! $attributes_raw) return [];
     $data = json_decode($attributes_raw, true);
-    if (! is_array($data)) {
-        if (count($errors) < 200) {
-            $errors[] = array('row' => $row_number, 'product_id' => $external_product_id, 'error' => 'Invalid attributes JSON.');
-        }
-        return [];
-    }
+    if (! is_array($data)) return [];
 
     $attributes = [];
-
     foreach ($data as $attr) {
-        if (! is_array($attr)) {
-            continue;
-        }
-
+        if (! is_array($attr)) continue;
         $taxonomy = isset($attr['taxonomy']) ? (string) $attr['taxonomy'] : '';
         $attr_label = isset($attr['name']) ? (string) $attr['name'] : '';
-        $has_variations = ! empty($attr['has_variations']);
-        if (! $taxonomy || $has_variations) {
-            // Skip variation attributes here; variation attributes are handled by variants.
-            continue;
-        }
+        if (! $taxonomy || ! empty($attr['has_variations'])) continue;
 
-        if (! taxonomy_exists($taxonomy)) {
-            if (! sss_ensure_attribute_taxonomy($taxonomy, $attr_label)) {
-                if (count($errors) < 200) {
-                    $errors[] = array('row' => $row_number, 'product_id' => $external_product_id, 'error' => 'Unknown attribute taxonomy: ' . $taxonomy);
-                }
-                continue;
-            }
-        }
-
-        if (! taxonomy_exists($taxonomy)) {
-            if (count($errors) < 200) {
-                $errors[] = array('row' => $row_number, 'product_id' => $external_product_id, 'error' => 'Unknown attribute taxonomy: ' . $taxonomy);
-            }
-            continue;
-        }
+        if (! taxonomy_exists($taxonomy)) sss_ensure_attribute_taxonomy($taxonomy, $attr_label);
+        if (! taxonomy_exists($taxonomy)) continue;
 
         $terms = isset($attr['terms']) && is_array($attr['terms']) ? $attr['terms'] : [];
         $term_ids = [];
         foreach ($terms as $term) {
-            if (! is_array($term)) {
-                continue;
-            }
             $term_name = isset($term['name']) ? (string) $term['name'] : '';
             $term_slug = isset($term['slug']) ? (string) $term['slug'] : '';
-
-            $existing = null;
-            if ($term_slug !== '') {
-                $existing = term_exists($term_slug, $taxonomy);
-            }
-            if (! $existing && $term_name !== '') {
-                $existing = term_exists($term_name, $taxonomy);
-            }
+            $existing = $term_slug !== '' ? term_exists($term_slug, $taxonomy) : term_exists($term_name, $taxonomy);
 
             if (! $existing && $term_name !== '') {
                 $inserted = wp_insert_term($term_name, $taxonomy, $term_slug ? ['slug' => $term_slug] : []);
-                if (! is_wp_error($inserted)) {
-                    $term_ids[] = (int) $inserted['term_id'];
-                }
-            } elseif (is_array($existing) && isset($existing['term_id'])) {
+                if (! is_wp_error($inserted)) $term_ids[] = (int) $inserted['term_id'];
+            } elseif (is_array($existing)) {
                 $term_ids[] = (int) $existing['term_id'];
-            } elseif (is_int($existing)) {
-                $term_ids[] = (int) $existing;
             }
         }
 
         $term_ids = array_values(array_unique(array_filter($term_ids)));
-        if (empty($term_ids)) {
-            continue;
-        }
+        if (empty($term_ids)) continue;
 
         wp_set_object_terms($product_id, $term_ids, $taxonomy, false);
-
         $attr_obj = new WC_Product_Attribute();
-        $attr_obj->set_id(isset($attr['id']) ? (int) $attr['id'] : 0);
         $attr_obj->set_name($taxonomy);
         $attr_obj->set_options($term_ids);
-        $attr_obj->set_position(0);
         $attr_obj->set_visible(true);
         $attr_obj->set_variation(false);
         $attributes[] = $attr_obj;
     }
-
     return $attributes;
 }
 
 function sss_merge_product_attributes($base_attributes, $extra_attributes)
 {
-    if (empty($extra_attributes)) {
-        return $base_attributes ?: [];
-    }
-
     $merged = [];
     foreach ((array) $base_attributes as $attr) {
-        if (! $attr instanceof WC_Product_Attribute) {
-            continue;
-        }
-        $merged[$attr->get_name()] = $attr;
+        if ($attr instanceof WC_Product_Attribute) $merged[$attr->get_name()] = $attr;
     }
-
     foreach ((array) $extra_attributes as $attr) {
-        if (! $attr instanceof WC_Product_Attribute) {
-            continue;
-        }
-
+        if (! $attr instanceof WC_Product_Attribute) continue;
         $name = $attr->get_name();
         if (isset($merged[$name])) {
             $existing = $merged[$name];
             $options = array_unique(array_merge($existing->get_options(), $attr->get_options()));
             $existing->set_options(array_values($options));
-            if ($attr->get_variation()) {
-                $existing->set_variation(true);
-            }
             $merged[$name] = $existing;
         } else {
             $merged[$name] = $attr;
         }
     }
-
     return array_values($merged);
 }
 
 function sss_sanitize_product_html($html)
 {
-    if ($html === '') {
-        return '';
-    }
-
+    if ($html === '') return '';
     $allowed = wp_kses_allowed_html('post');
-
-    $allowed['div']['style'] = true;
-    $allowed['div']['class'] = true;
-    $allowed['div']['id'] = true;
-
-    $allowed['video'] = array(
-        'class'    => true,
-        'id'       => true,
-        'width'    => true,
-        'height'   => true,
-        'preload'  => true,
-        'controls' => true,
-        'poster'   => true,
-        'style'    => true,
-        'src'      => true,
-    );
-
-    $allowed['source'] = array(
-        'src'  => true,
-        'type' => true,
-    );
-
-    $allowed['a']['href'] = true;
-
+    $allowed['div'] = array('style' => true, 'class' => true, 'id' => true);
+    $allowed['video'] = array('class' => true, 'width' => true, 'height' => true, 'controls' => true, 'src' => true);
+    $allowed['source'] = array('src' => true, 'type' => true);
     return wp_kses($html, $allowed);
 }
 
 function sss_normalize_video_html($html)
 {
-    if ($html === '') {
-        return '';
-    }
-
-    // If <video> has no src or <source>, but contains an <a href="...mp4">, set src on <video>.
+    if ($html === '') return '';
     $pattern = '/<video\\b(?![^>]*\\bsrc=)([^>]*)>(.*?)<\\/video>/is';
-    $html = preg_replace_callback($pattern, function ($m) {
-        $attrs = $m[1];
-        $inner = $m[2];
-
-        if (stripos($inner, '<source') !== false) {
-            return $m[0];
+    return preg_replace_callback($pattern, function ($m) {
+        if (stripos($m[2], '<source') !== false) return $m[0];
+        if (preg_match("~<a\\b[^>]*href=([\"'])([^\"']+)\\1[^>]*>.*?</a>~is", $m[2], $am)) {
+            if (preg_match('/\\.(mp4|webm|ogg)/i', $am[2])) return '<video' . $m[1] . ' src="' . esc_url($am[2]) . '"></video>';
         }
-
-        if (preg_match("~<a\\b[^>]*href=([\"'])([^\"']+)\\1[^>]*>.*?</a>~is", $inner, $am)) {
-            $href = $am[2];
-            // Only rewrite common video links
-            if (preg_match('/\\.(mp4|webm|ogg)(\\?.*)?$/i', $href)) {
-                return '<video' . $attrs . ' src="' . esc_url($href) . '"></video>';
-            }
-        }
-
         return $m[0];
     }, $html);
-
-    return $html;
 }
 
 function sss_ensure_attribute_taxonomy($taxonomy, $label = '')
 {
-    if ($taxonomy === '' || taxonomy_exists($taxonomy)) {
-        return true;
-    }
-
-    if (strpos($taxonomy, 'pa_') !== 0) {
-        return false;
-    }
-
-    if (! function_exists('wc_create_attribute')) {
-        return false;
-    }
-
-    $slug = substr($taxonomy, 3);
-    $slug = wc_sanitize_taxonomy_name($slug);
-    $label = $label !== '' ? $label : ucwords(str_replace('-', ' ', $slug));
-
-    $existing_id = wc_attribute_taxonomy_id_by_name($slug);
-    if (! $existing_id) {
-        $created = wc_create_attribute([
-            'name'         => $label,
-            'slug'         => $slug,
-            'type'         => 'select',
-            'order_by'     => 'menu_order',
-            'has_archives' => false,
-        ]);
-
-        if (is_wp_error($created) || ! $created) {
-            return false;
-        }
-    }
-
-    // Register for this request so taxonomy_exists() will pass.
-    register_taxonomy(
-        'pa_' . $slug,
-        ['product'],
-        [
-            'hierarchical'          => false,
-            'show_ui'               => true,
-            'query_var'             => true,
-            'rewrite'               => false,
-            'show_admin_column'     => false,
-            'show_in_nav_menus'     => false,
-            'public'                => false,
-            'show_in_quick_edit'    => false,
-        ]
-    );
-
+    if ($taxonomy === '' || taxonomy_exists($taxonomy)) return true;
+    if (strpos($taxonomy, 'pa_') !== 0 || ! function_exists('wc_create_attribute')) return false;
+    $slug = wc_sanitize_taxonomy_name(substr($taxonomy, 3));
+    wc_create_attribute(['name' => $label ?: ucwords($slug), 'slug' => $slug, 'type' => 'select']);
+    register_taxonomy($taxonomy, ['product'], ['hierarchical' => false, 'public' => false]);
     return true;
 }
 
 function save_brands($external_brand_name, $external_brand_id, $product_id)
 {
-    $brand_term_id = sss_get_or_create_brand(
-        $external_brand_name,
-        $external_brand_id
-    );
+    $brand_term_id = sss_get_or_create_brand($external_brand_name, $external_brand_id);
+    if ($brand_term_id) wp_set_object_terms($product_id, array($brand_term_id), 'product_brand', false);
+}
 
-    if ($brand_term_id) {
-        wp_set_object_terms(
-            $product_id,
-            array($brand_term_id),
-            'product_brand',
-            false // replace existing brand
-        );
+/**
+ * Changes product type while preserving the same Product ID
+ */
+function sss_convert_product_type($product_id, $new_type)
+{
+    // Update the term in the database
+    wp_set_object_terms($product_id, $new_type, 'product_type');
+
+    // If moving to simple, delete the old leftover variations
+    if ($new_type === 'simple') {
+        $product = wc_get_product($product_id);
+        if ($product && $product->is_type('variable')) {
+            foreach ($product->get_children() as $child_id) {
+                wp_delete_post($child_id, true);
+            }
+        }
     }
+
+    // Clear WooCommerce transients so the new class (Simple/Variable) loads correctly
+    wc_delete_product_transients($product_id);
+
+    return $product_id;
 }
