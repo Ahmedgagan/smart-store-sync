@@ -66,11 +66,6 @@ class MSI_Data_Provider
 
     public function get_subscription_details($purchase_token, $reset_catch = false)
     {
-        // Try cache first
-        $cached = get_transient($purchase_token);
-        if (is_array($cached) && !$reset_catch) {
-            return $cached;
-        }
 
         $body_params = array(
             'token' => $purchase_token,
@@ -105,9 +100,6 @@ class MSI_Data_Provider
         // We expect $data to already be the array of stores as per your example.
         // If later the API wraps it in a "data" key, you can adapt here.
         $plan_details = $data['data'];
-
-        // Cache it
-        set_transient($purchase_token, $plan_details, self::CACHE_TTL);
 
         return $plan_details;
     }

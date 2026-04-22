@@ -18,10 +18,47 @@ add_action('rest_api_init', function () {
         array(
             'methods'             => array('GET', 'POST'),
             'callback'            => 'sss_handle_request',
-            'permission_callback' => '__return_true',
+            'permission_callback' => 'sss_check_wc_api_permissions',
         )
     );
 });
+
+function sss_check_wc_api_permissions(WP_REST_Request $request)
+{
+    global $wpdb;
+
+    $consumer_key    = $request->get_param('consumer_key');
+    $consumer_secret = $request->get_param('consumer_secret');
+
+    if (empty($consumer_key) || empty($consumer_secret)) {
+        return new WP_Error('rest_forbidden', 'Missing keys.', ['status' => 401]);
+    }
+
+    // 1. Hash the key (WC stores the SHA256 hash of the 'ck_...' string)
+    $hashed_key = function_exists('wc_api_hash') ? wc_api_hash($consumer_key) : hash('sha256', $consumer_key);
+
+    // 2. Look up the key in the database
+    $key_data = $wpdb->get_row($wpdb->prepare(
+        "SELECT * FROM {$wpdb->prefix}woocommerce_api_keys WHERE consumer_key = %s",
+        $hashed_key
+    ));
+
+    if (!$key_data) {
+        return new WP_Error('rest_forbidden', 'Consumer Key not found.', ['status' => 401]);
+    }
+
+    // 3. Match the secret (Modern WC uses hash_equals for comparison)
+    if (!hash_equals($key_data->consumer_secret, $consumer_secret)) {
+        return new WP_Error('rest_forbidden', 'Consumer Secret is invalid.', ['status' => 401]);
+    }
+
+    // 4. Ensure it has Write permissions
+    if ($key_data->permissions === 'read') {
+        return new WP_Error('rest_forbidden', 'Key is Read-only. Must be Read/Write.', ['status' => 401]);
+    }
+
+    return true;
+}
 
 add_action('init', function () {
     if (taxonomy_exists('product_brand')) {
@@ -628,14 +665,17 @@ function sss_run_product_batch($csv_path, $start_row, $stats)
  */
 function sss_dispatch_completion_data($stats)
 {
-    error_log(json_encode($stats));
-    $api_url = 'https://your-external-api.com/callback';
+    $stored = get_option('store_import_settings', []);
+
+    $api_url = 'https://api.smartstoresync.com/api/webhooks/push-complete';
     wp_remote_post($api_url, array(
         'method'    => 'POST',
-        'headers'   => array('Content-Type' => 'application/json'),
+        'headers'   => array('Content-Type' => 'application/json', 'x-webhook-secret' => "1cdf73e241d04d0e3fecf4dbce4fe9cb44506e715393833dfc552a1dd84941cc"),
         'body'      => json_encode(array(
             'status'    => 'completed',
             'summary'   => $stats,
+            'token' => $stored["purchase_token"],
+            'buyer_domain' => get_site_url(),
             'timestamp' => current_time('mysql'),
         )),
         'timeout'   => 45,

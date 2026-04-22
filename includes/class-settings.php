@@ -551,7 +551,7 @@ class MSI_Settings
 
         <p>
             Don’t have a token?
-            <a href="https://kodyt.com/smartstore-sync" target="_blank">
+            <a href="https://kodyt.com/smart-store-sync" target="_blank">
                 Buy a plan →
             </a>
         </p>
