@@ -1,26 +1,56 @@
 <?php
 
-// includes/rest-handler.php
-if (! defined('ABSPATH')) {
-    exit;
-}
+if (! defined('ABSPATH')) exit;
 
 require_once MSI_PATH . 'includes/class-data-provider.php';
 require_once MSI_PATH . 'includes/class-settings.php';
 
 /**
- * Register REST route
+ * =========================================
+ * DB TABLES (RUN ON INIT SAFE)
+ * =========================================
+ */
+add_action('init', function () {
+    global $wpdb;
+
+    $charset_collate = $wpdb->get_charset_collate();
+
+    $jobs = $wpdb->prefix . 'sss_jobs';
+    $batches = $wpdb->prefix . 'sss_job_batches';
+
+    require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+
+    dbDelta("CREATE TABLE IF NOT EXISTS $jobs (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        job_id VARCHAR(64) NOT NULL UNIQUE,
+        total_batches INT NOT NULL,
+        completed_batches INT DEFAULT 0,
+        status VARCHAR(20) DEFAULT 'running',
+        stats LONGTEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) $charset_collate;");
+
+    dbDelta("CREATE TABLE IF NOT EXISTS $batches (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        job_id VARCHAR(64) NOT NULL,
+        batch_offset INT NOT NULL,
+        status VARCHAR(20) DEFAULT 'pending',
+        UNIQUE KEY unique_batch (job_id, batch_offset)
+    ) $charset_collate;");
+});
+
+/**
+ * =========================================
+ * REST ROUTE
+ * =========================================
  */
 add_action('rest_api_init', function () {
-    register_rest_route(
-        'product-sync/v1',
-        '/products',
-        array(
-            'methods'             => array('GET', 'POST'),
-            'callback'            => 'sss_handle_request',
-            'permission_callback' => 'sss_check_wc_api_permissions',
-        )
-    );
+    register_rest_route('product-sync/v1', '/products', [
+        'methods' => ['GET', 'POST'],
+        'callback' => 'sss_handle_request',
+        'permission_callback' => 'sss_check_wc_api_permissions'
+    ]);
 });
 
 function sss_check_wc_api_permissions(WP_REST_Request $request)
@@ -78,9 +108,10 @@ add_action('init', function () {
         )
     );
 });
-
 /**
- * REST API Handler: Saves file and initiates background processing
+ * =========================================
+ * REQUEST HANDLER
+ * =========================================
  */
 function sss_handle_request(WP_REST_Request $request)
 {
@@ -99,55 +130,130 @@ function sss_handle_request(WP_REST_Request $request)
     }
 
     $files = $request->get_file_params();
+
     if (empty($files['file']) || ! isset($files['file']['tmp_name'])) {
         return new WP_Error('sss_no_file', 'No CSV file uploaded.', array('status' => 400));
     }
 
     $upload_dir = wp_upload_dir();
-    $sync_dir   = $upload_dir['basedir'] . '/product-sync-temp/';
+    $dir = $upload_dir['basedir'] . '/product-sync-temp/';
 
-    if (! file_exists($sync_dir)) {
-        wp_mkdir_p($sync_dir);
-    }
+    if (!file_exists($dir)) wp_mkdir_p($dir);
 
-    $filename  = 'sync_' . uniqid() . '.csv';
-    $full_path = $sync_dir . $filename;
+    $file_path = $dir . 'sync_' . uniqid() . '.csv';
 
-    if (! move_uploaded_file($files['file']['tmp_name'], $full_path)) {
+
+    if (! move_uploaded_file($files['file']['tmp_name'], $file_path)) {
         return new WP_Error('sss_upload_fail', 'Could not save CSV file locally.', array('status' => 500));
     }
 
-    as_enqueue_async_action('sss_process_csv_batch', array(
-        'file_path' => $full_path,
-        'row_index' => 0,
-        'stats'     => array(
-            'created'         => 0,
-            'stock_updated'   => 0,
-            'stock_unchanged' => 0,
-            'errors'          => array()
-        )
-    ), 'product_sync_group');
+    // Count rows
+    $total_rows = 0;
+    $handle = fopen($file_path, 'r');
+    while (fgetcsv($handle)) $total_rows++;
+    fclose($handle);
+
+    $job_id = sss_start_parallel_import($file_path, $total_rows);
 
     return new WP_REST_Response(
         array(
             'ok'      => true,
             'message' => 'File received. Background processing started in batches of 100.',
-            'job_id'  => $filename
+            'job_id'  => $job_id
         ),
         202
     );
 }
 
 /**
- * Background Worker Hooked to Action Scheduler
+ * =========================================
+ * START PARALLEL JOB
+ * =========================================
  */
-add_action('sss_process_csv_batch', 'sss_run_product_batch', 10, 3);
-function sss_run_product_batch($csv_path, $start_row, $stats)
+function sss_start_parallel_import($file_path, $total_rows)
 {
-    if (! file_exists($csv_path)) return;
+    global $wpdb;
+
+    $job_id = uniqid('sync_', true);
+    $batch_size = 25;
+    $total_batches = ceil($total_rows / $batch_size);
+
+    $wpdb->insert(
+        $wpdb->prefix . 'sss_jobs',
+        [
+            'job_id' => $job_id,
+            'total_batches' => $total_batches,
+            'stats' => json_encode([
+                'created' => 0,
+                'stock_updated' => 0,
+                'stock_unchanged' => 0,
+                'errors' => []
+            ])
+        ]
+    );
+
+    for ($offset = 1; $offset < $total_rows; $offset += $batch_size) {
+        $args = [
+            'file_path' => $file_path,
+            'row_index' => $offset,
+            'job_id' => $job_id
+        ];
+
+        as_enqueue_async_action('sss_process_csv_batch', $args);
+    }
+
+    return $job_id;
+}
+
+/**
+ * =========================================
+ * WORKER HOOK
+ * =========================================
+ */
+add_action('sss_process_csv_batch', 'sss_worker_entry', 10, 3);
+
+function sss_worker_entry($file_path, $start_row, $job_id)
+{
+    $stats = [
+        'created' => 0,
+        'stock_updated' => 0,
+        'stock_unchanged' => 0,
+        'errors' => [],
+        'skip' => []
+    ];
+
+    // 👉 CALL YOUR EXISTING LOGIC HERE
+    // Replace this with your real batch processor:
+    $stats = sss_process_batch_core($file_path, $start_row);
+
+    sss_handle_batch_completion($job_id, $start_row, $stats);
+}
+
+/**
+ * =========================================
+ * YOUR EXISTING LOGIC WRAPPER
+ * =========================================
+ */
+function sss_process_batch_core($csv_path, $start_row)
+{
+    $stats = [
+        'created' => 0,
+        'stock_updated' => 0,
+        'stock_unchanged' => 0,
+        'errors' => [],
+        'skip' => []
+    ];
+    if (! file_exists($csv_path)) return $stats;
 
     @ini_set('max_execution_time', 300);
     @ini_set('memory_limit', '512M');
+
+    add_filter('woocommerce_product_lookup_tables_is_syncing', '__return_true');
+
+    // Defer expensive counting
+    wp_defer_term_counting(true);
+    wp_defer_comment_counting(true);
+
     wp_suspend_cache_invalidation(true);
 
     if (! function_exists('WP_Filesystem')) {
@@ -158,7 +264,7 @@ function sss_run_product_batch($csv_path, $start_row, $stats)
     $handle = fopen($csv_path, 'r');
     $header = fgetcsv($handle, 0, ',');
 
-    $batch_size      = 100;
+    $batch_size      = 25;
     $current_row     = 0;
     $processed_count = 0;
 
@@ -643,25 +749,85 @@ function sss_run_product_batch($csv_path, $start_row, $stats)
         }
     }
 
-    $has_more = ! feof($handle);
-    fclose($handle);
+    wp_defer_term_counting(false);
+    wp_defer_comment_counting(false);
 
-    if ($has_more) {
-        as_enqueue_async_action('sss_process_csv_batch', array(
-            'file_path' => $csv_path,
-            'row_index' => $current_row,
-            'stats'     => $stats
-        ), 'product_sync_group');
-    } else {
-        sss_dispatch_completion_data($stats);
-        unlink($csv_path);
-    }
+    // Remove filter to avoid leaking into other requests
+    remove_filter('woocommerce_product_lookup_tables_is_syncing', '__return_true');
 
-    wp_suspend_cache_invalidation(false);
+    return $stats;
 }
 
 /**
- * Sends final data to external API
+ * =========================================
+ * LOCKED COMPLETION HANDLER
+ * =========================================
+ */
+function sss_handle_batch_completion($job_id, $offset, $batch_stats)
+{
+    global $wpdb;
+
+    $jobs = $wpdb->prefix . 'sss_jobs';
+    $batches = $wpdb->prefix . 'sss_job_batches';
+
+    // Idempotency check
+    $exists = $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM $batches WHERE job_id=%s AND batch_offset=%d AND status='done'",
+        $job_id,
+        $offset
+    ));
+
+    if ($exists) return;
+
+    $wpdb->insert($batches, [
+        'job_id' => $job_id,
+        'batch_offset' => $offset,
+        'status' => 'done'
+    ]);
+
+    // Transaction start
+    $wpdb->query('START TRANSACTION');
+
+    $job = $wpdb->get_row(
+        $wpdb->prepare("SELECT * FROM $jobs WHERE job_id=%s FOR UPDATE", $job_id),
+        ARRAY_A
+    );
+
+    if (!$job) {
+        $wpdb->query('ROLLBACK');
+        return;
+    }
+
+    $stats = json_decode($job['stats'], true);
+
+    $stats['created'] += $batch_stats['created'];
+    $stats['stock_updated'] += $batch_stats['stock_updated'];
+    $stats['stock_unchanged'] += $batch_stats['stock_unchanged'];
+
+    if (!empty($batch_stats['errors'])) {
+        $stats['errors'] = array_merge($stats['errors'], $batch_stats['errors']);
+    }
+
+    $completed = $job['completed_batches'] + 1;
+    $done = $completed >= $job['total_batches'];
+
+    $wpdb->update($jobs, [
+        'completed_batches' => $completed,
+        'stats' => json_encode($stats),
+        'status' => $done ? 'completed' : 'running'
+    ], ['job_id' => $job_id]);
+
+    $wpdb->query('COMMIT');
+
+    if ($done) {
+        sss_dispatch_completion_data($stats);
+    }
+}
+
+/**
+ * =========================================
+ * CALLBACK
+ * =========================================
  */
 function sss_dispatch_completion_data($stats)
 {
