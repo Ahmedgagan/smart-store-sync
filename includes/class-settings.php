@@ -14,12 +14,6 @@ class MSI_Settings
 
         add_action('admin_menu', [$this, 'sss_register_menu']);
         add_action('admin_init', [$this, 'sss_handle_form_submissions']);
-        add_filter('action_scheduler_queue_runner_batch_size', 'add_runner_batch_size');
-    }
-
-    public function add_runner_batch_size()
-    {
-        return 3;
     }
 
     public function sss_register_menu()

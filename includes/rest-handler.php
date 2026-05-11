@@ -192,7 +192,7 @@ function sss_start_parallel_import($file_path, $total_rows)
         ]
     );
 
-    for ($offset = 1; $offset < $total_rows; $offset += $batch_size) {
+    for ($offset = 0; $offset < $total_rows; $offset += $batch_size) {
         $args = [
             'file_path' => $file_path,
             'row_index' => $offset,
