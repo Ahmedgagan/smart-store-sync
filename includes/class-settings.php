@@ -15,11 +15,17 @@ class MSI_Settings
         add_action('admin_menu', [$this, 'sss_register_menu']);
         add_action('admin_init', [$this, 'sss_handle_form_submissions']);
         add_filter('action_scheduler_queue_runner_batch_size', [$this, 'add_runner_batch_size']);
+        add_filter('action_scheduler_queue_runner_concurrent_batches', [$this, 'custom_max_concurrent_queues']);
+    }
+
+    function custom_max_concurrent_queues()
+    {
+        return 3; // Safely bumps parallel queues from 1 to 3
     }
 
     public function add_runner_batch_size()
     {
-        return 5;
+        return 100;
     }
 
     public function sss_register_menu()
