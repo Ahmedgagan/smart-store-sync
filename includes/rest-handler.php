@@ -415,7 +415,7 @@ function sss_process_batch_core($csv_path, $start_row)
                                 'sale_price' => $price_with_profit ?: '',
                                 'orignal_price' => $original_price ?: '',
                                 'stock_status' => $stock_status_raw ?: '',
-                                'stock_quantity' => (strtolower(trim($stock_status_raw)) === 'in_stock') ? 1000 : 0,
+                                'stock_quantity' => (strtolower(trim($stock_status_raw)) === 'instock') ? 1000 : 0,
                                 'image_url' => '',
                                 'attributes' => array($attr_name => $attr_value),
                             );
@@ -451,6 +451,7 @@ function sss_process_batch_core($csv_path, $start_row)
                     if ($description !== '') $parent->set_description($description);
                     if ($new_post_status) $parent->set_status($new_post_status);
                     if (is_array($woo_category_ids)) $parent->set_category_ids($woo_category_ids);
+                    $parent->set_stock_status($var_stock_status);
                     $parent->set_manage_stock(false);
                     $parent_id = $parent->save();
                     save_brands($external_brand_name, $external_brand_id, $parent_id);
@@ -587,7 +588,7 @@ function sss_process_batch_core($csv_path, $start_row)
                     $var_price = isset($v['sale_price']) ? trim($v['sale_price']) : ($price_with_profit ?: '');
                     $var_orignal_price = isset($v['orignal_price']) ? trim($v['orignal_price']) : ($original_price ?: '');
                     $var_stock_status = isset($v['stock_status']) ? sss_map_stock_status($v['stock_status']) : $new_wc_status;
-                    $var_stock_qty = isset($v['stock_quantity']) ? intval($v['stock_quantity']) : ($var_stock_status === 'in_stock' ? 1000 : 0);
+                    $var_stock_qty = isset($v['stock_quantity']) ? intval($v['stock_quantity']) : ($var_stock_status === 'instock' ? 1000 : 0);
                     $var_image_url = isset($v['image_url']) ? trim($v['image_url']) : '';
 
                     if (! $var_sku) {
@@ -641,7 +642,7 @@ function sss_process_batch_core($csv_path, $start_row)
                     if ($new_post_status) $product->set_status($new_post_status);
                     $product->set_manage_stock(true);
                     $product->set_stock_status($new_wc_status);
-                    $product->set_stock_quantity((strtolower(trim($new_wc_status)) === 'in_stock') ? 1000 : 0);
+                    $product->set_stock_quantity((strtolower(trim($new_wc_status)) === 'instock') ? 1000 : 0);
                     $product_id = $product->save();
                     save_brands($external_brand_name, $external_brand_id, $product_id);
                     $product->update_meta_data('_external_product_id', $external_product_id);
@@ -677,7 +678,7 @@ function sss_process_batch_core($csv_path, $start_row)
                     if ($new_wc_status !== $product->get_stock_status()) {
                         $product->set_manage_stock(true);
                         $product->set_stock_status($new_wc_status);
-                        $product->set_stock_quantity((strtolower(trim($new_wc_status)) === 'in_stock') ? 1000 : 0);
+                        $product->set_stock_quantity((strtolower(trim($new_wc_status)) === 'instock') ? 1000 : 0);
                         $stats['stock_updated']++;
                         $needs_save = true;
                     } else {
