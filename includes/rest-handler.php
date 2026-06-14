@@ -415,7 +415,7 @@ function sss_process_batch_core($csv_path, $start_row)
                                 'sale_price' => $price_with_profit ?: '',
                                 'orignal_price' => $original_price ?: '',
                                 'stock_status' => $stock_status_raw ?: '',
-                                'stock_quantity' => (strtolower(trim($stock_status_raw)) === 'instock') ? 1000 : 0,
+                                'stock_quantity' => (strtolower(trim($stock_status_raw)) === 'in_stock') ? 1000 : 0,
                                 'image_url' => '',
                                 'attributes' => array($attr_name => $attr_value),
                             );
@@ -451,7 +451,7 @@ function sss_process_batch_core($csv_path, $start_row)
                     if ($description !== '') $parent->set_description($description);
                     if ($new_post_status) $parent->set_status($new_post_status);
                     if (is_array($woo_category_ids)) $parent->set_category_ids($woo_category_ids);
-                    $parent->set_stock_status($var_stock_status);
+                    $parent->set_stock_status($new_wc_status);
                     $parent->set_manage_stock(false);
                     $parent_id = $parent->save();
                     save_brands($external_brand_name, $external_brand_id, $parent_id);
@@ -479,7 +479,7 @@ function sss_process_batch_core($csv_path, $start_row)
                 } else {
                     if ($product->get_type() !== 'variable') {
                         $parent = new WC_Product_Variable();
-                        $parent->set_name($product_name ?: $product->get_name());
+                        $parent->set_name($product_name ? $product_name : $product->get_name());
                         if ($short_description !== '') $parent->set_short_description($short_description);
                         if ($description !== '') $parent->set_description($description);
                         if ($new_post_status) $parent->set_status($new_post_status);
@@ -511,6 +511,7 @@ function sss_process_batch_core($csv_path, $start_row)
                         $product->update_meta_data('_external_category_id', $external_category_id);
                         $product->update_meta_data('_external_category_ids', $external_category_ids_csv);
                         $product->update_meta_data('_external_store_id', $external_store_id);
+                        $product->set_name($product_name ? $product_name : $product->get_name());
                         if (is_array($woo_category_ids) && $woo_category_ids !== $product->get_category_ids()) {
                             $product->set_category_ids($woo_category_ids);
                         }
