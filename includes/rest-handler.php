@@ -138,10 +138,21 @@ function sss_handle_request(WP_REST_Request $request)
     $upload_dir = wp_upload_dir();
     $dir = $upload_dir['basedir'] . '/product-sync-temp/';
 
-    if (!file_exists($dir)) wp_mkdir_p($dir);
+    if (!file_exists($dir)) {
+        wp_mkdir_p($dir);
+    } else {
+        // Empty old temporary CSV files from the directory
+        $old_files = glob($dir . 'sync_*');
+        if (is_array($old_files)) {
+            foreach ($old_files as $old_file) {
+                if (is_file($old_file)) {
+                    @unlink($old_file);
+                }
+            }
+        }
+    }
 
     $file_path = $dir . 'sync_' . uniqid() . '.csv';
-
 
     if (! move_uploaded_file($files['file']['tmp_name'], $file_path)) {
         return new WP_Error('sss_upload_fail', 'Could not save CSV file locally.', array('status' => 500));
@@ -153,12 +164,14 @@ function sss_handle_request(WP_REST_Request $request)
     while (fgetcsv($handle)) $total_rows++;
     fclose($handle);
 
+    if ($total_rows > 1) $total_rows -= 1;
+
     $job_id = sss_start_parallel_import($file_path, $total_rows);
 
     return new WP_REST_Response(
         array(
             'ok'      => true,
-            'message' => 'File received. Background processing started in batches of 100.',
+            'message' => 'File received. Background processing started in batches of 25.',
             'job_id'  => $job_id
         ),
         202
@@ -222,11 +235,21 @@ function sss_worker_entry($file_path, $start_row, $job_id)
         'skip' => []
     ];
 
-    // 👉 CALL YOUR EXISTING LOGIC HERE
-    // Replace this with your real batch processor:
-    $stats = sss_process_batch_core($file_path, $start_row);
-
-    sss_handle_batch_completion($job_id, $start_row, $stats);
+    try {
+        // Run batch core logic
+        $stats = sss_process_batch_core($file_path, $start_row);
+    } catch (Throwable $e) {
+        // Capture fatal batch errors so they get merged into job stats
+        $error_msg = sprintf('Batch at row %d failed: %s', $start_row, $e->getMessage());
+        error_log($error_msg);
+        $stats['errors'][] = [
+            'row' => $start_row,
+            'error' => $error_msg
+        ];
+    } finally {
+        // Always record completion (success or failure) to advance completed_batches count
+        sss_handle_batch_completion($job_id, $start_row, $stats);
+    }
 }
 
 /**
@@ -279,6 +302,15 @@ function sss_process_batch_core($csv_path, $start_row)
     while ($processed_count < $batch_size && ($data = fgetcsv($handle, 0, ',')) !== false) {
         $current_row++;
         $processed_count++;
+
+        if ($processed_count % 10 === 0) {
+            if (function_exists('wp_cache_flush')) {
+                wp_cache_flush();
+            }
+            if (function_exists('gc_collect_cycles')) {
+                gc_collect_cycles();
+            }
+        }
 
         try {
             $row = array();
@@ -372,8 +404,9 @@ function sss_process_batch_core($csv_path, $start_row)
             $has_variants    = in_array(strtolower(trim($has_variants_raw)), array('1', 'true', 'yes', 'y', 'on'), true);
 
             $product = null;
-            if (isset($external_map[$external_product_id])) {
-                $product = wc_get_product($external_map[$external_product_id]);
+            $existing_id = $external_map[$external_product_id] ?? 0;
+            if ($existing_id) {
+                $product = wc_get_product($existing_id);
             }
 
             $parent_image_id = 0;
@@ -396,6 +429,7 @@ function sss_process_batch_core($csv_path, $start_row)
 
             if ($has_variants) {
                 $variants = json_decode($variants_raw, true);
+
                 if (is_array($variants) && ! empty($variants)) {
                     $looks_like_name_value = true;
                     foreach ($variants as $v) {
@@ -772,26 +806,32 @@ function sss_handle_batch_completion($job_id, $offset, $batch_stats)
     $jobs = $wpdb->prefix . 'sss_jobs';
     $batches = $wpdb->prefix . 'sss_job_batches';
 
-    // Idempotency check
+    // 1. Idempotency check: Don't process the same batch twice
     $exists = $wpdb->get_var($wpdb->prepare(
-        "SELECT COUNT(*) FROM $batches WHERE job_id=%s AND batch_offset=%d AND status='done'",
+        "SELECT COUNT(*) FROM $batches WHERE job_id = %s AND batch_offset = %d",
         $job_id,
         $offset
     ));
 
-    if ($exists) return;
+    if ($exists) {
+        return;
+    }
 
+    // Determine if batch succeeded or had unhandled errors
+    $batch_status = !empty($batch_stats['errors']) ? 'failed' : 'done';
+
+    // Insert batch status row so this batch is officially accounted for
     $wpdb->insert($batches, [
-        'job_id' => $job_id,
+        'job_id'       => $job_id,
         'batch_offset' => $offset,
-        'status' => 'done'
+        'status'       => $batch_status
     ]);
 
-    // Transaction start
+    // 2. Transaction start to safely update total job stats
     $wpdb->query('START TRANSACTION');
 
     $job = $wpdb->get_row(
-        $wpdb->prepare("SELECT * FROM $jobs WHERE job_id=%s FOR UPDATE", $job_id),
+        $wpdb->prepare("SELECT * FROM $jobs WHERE job_id = %s FOR UPDATE", $job_id),
         ARRAY_A
     );
 
@@ -800,27 +840,38 @@ function sss_handle_batch_completion($job_id, $offset, $batch_stats)
         return;
     }
 
-    $stats = json_decode($job['stats'], true);
+    $stats = json_decode($job['stats'], true) ?: [
+        'created' => 0,
+        'stock_updated' => 0,
+        'stock_unchanged' => 0,
+        'errors' => []
+    ];
 
-    $stats['created'] += $batch_stats['created'];
-    $stats['stock_updated'] += $batch_stats['stock_updated'];
-    $stats['stock_unchanged'] += $batch_stats['stock_unchanged'];
+    // Merge stats safely
+    $stats['created']         = ($stats['created'] ?? 0) + ($batch_stats['created'] ?? 0);
+    $stats['stock_updated']   = ($stats['stock_updated'] ?? 0) + ($batch_stats['stock_updated'] ?? 0);
+    $stats['stock_unchanged'] = ($stats['stock_unchanged'] ?? 0) + ($batch_stats['stock_unchanged'] ?? 0);
 
     if (!empty($batch_stats['errors'])) {
-        $stats['errors'] = array_merge($stats['errors'], $batch_stats['errors']);
+        $stats['errors'] = array_merge($stats['errors'] ?? [], $batch_stats['errors']);
     }
 
-    $completed = $job['completed_batches'] + 1;
-    $done = $completed >= $job['total_batches'];
+    // Increment completed count regardless of individual batch status
+    $completed = (int)$job['completed_batches'] + 1;
+    $done = $completed >= (int)$job['total_batches'];
 
     $wpdb->update($jobs, [
         'completed_batches' => $completed,
-        'stats' => json_encode($stats),
-        'status' => $done ? 'completed' : 'running'
+        'stats'             => json_encode($stats),
+        'status'            => $done ? 'completed' : 'running'
     ], ['job_id' => $job_id]);
 
     $wpdb->query('COMMIT');
 
+    $upload_dir = wp_upload_dir();
+    $dir = $upload_dir['basedir'] . '/product-sync-temp/';
+
+    // 3. Dispatch completion webhook when ALL batches finish
     if ($done) {
         sss_dispatch_completion_data($stats);
     }

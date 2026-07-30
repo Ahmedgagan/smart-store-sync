@@ -20,7 +20,7 @@ class MSI_Settings
 
     function custom_max_concurrent_queues()
     {
-        return 3; // Safely bumps parallel queues from 1 to 3
+        return 4; // Safely bumps parallel queues from 1 to 3
     }
 
     public function add_runner_batch_size()
