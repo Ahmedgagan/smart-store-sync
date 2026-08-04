@@ -9,6 +9,7 @@ if (! defined('ABSPATH')) {
  */
 
 add_action('woocommerce_store_api_checkout_order_processed', 'sss_add_item_urls_to_order_notes', 10, 2);
+add_action('woocommerce_checkout_create_order', 'sss_add_item_urls_to_order_notes', 10, 2);
 
 function sss_add_item_urls_to_order_notes($order)
 {
